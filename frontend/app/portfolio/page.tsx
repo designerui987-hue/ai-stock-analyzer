@@ -1,80 +1,168 @@
-// @ts-nocheck
 'use client';
 
-import { motion } from 'framer-motion';
+import React from 'react';
 import Link from 'next/link';
+import { ArrowUpRight, AlertTriangle, RefreshCw, Lightbulb, PieChart as PieIcon } from 'lucide-react';
+import { Card } from '@/components/ui/Card';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { Sparkline } from '@/components/ui/Sparkline';
 import { DEMO_PORTFOLIO, formatNumber } from '@/lib/data';
-
-const fadeInUp = {
-  initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0 },
-};
 
 export default function PortfolioPage() {
   const p = DEMO_PORTFOLIO;
   const isPositive = p.total_pnl >= 0;
 
   return (
-    <motion.div initial="initial" animate="animate" className="space-y-6 max-w-[1600px] mx-auto">
-      {/* Portfolio Summary Cards */}
-      <motion.div variants={fadeInUp} className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        {[
-          { label: 'Total Invested', value: `₹${(p.total_invested / 100000).toFixed(2)}L`, color: 'text-white' },
-          { label: 'Current Value', value: `₹${(p.current_value / 100000).toFixed(2)}L`, color: 'text-white' },
-          { label: 'Total P&L', value: `${isPositive ? '+' : ''}₹${(p.total_pnl / 1000).toFixed(1)}K`, sub: `${p.total_pnl_pct >= 0 ? '+' : ''}${p.total_pnl_pct}%`, color: isPositive ? 'text-accent-green' : 'text-accent-red' },
-          { label: "Today's P&L", value: `${p.day_pnl >= 0 ? '+' : ''}₹${formatNumber(p.day_pnl)}`, sub: `${p.day_pnl_pct >= 0 ? '+' : ''}${p.day_pnl_pct}%`, color: p.day_pnl >= 0 ? 'text-accent-green' : 'text-accent-red' },
-          { label: 'Holdings', value: p.holdings_count.toString(), color: 'text-accent-blue' },
-        ].map((card, i) => (
-          <div key={i} className="glass-card p-4">
-            <div className="text-xs text-dark-300 mb-1">{card.label}</div>
-            <div className={`text-xl font-bold ${card.color}`}>{card.value}</div>
-            {card.sub && <div className={`text-xs mt-1 ${card.color}`}>{card.sub}</div>}
+    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
+      {/* Portfolio Top Summary Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <Card className="flex flex-col justify-between">
+          <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">
+            Total Invested
+          </span>
+          <div className="mt-3">
+            <span className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
+              ₹{(p.total_invested / 100000).toFixed(2)}L
+            </span>
           </div>
-        ))}
-      </motion.div>
+        </Card>
 
+        <Card className="flex flex-col justify-between">
+          <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">
+            Current Value
+          </span>
+          <div className="mt-3">
+            <span className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
+              ₹{(p.current_value / 100000).toFixed(2)}L
+            </span>
+          </div>
+        </Card>
+
+        <Card className="flex flex-col justify-between">
+          <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">
+            Total P&L
+          </span>
+          <div className="mt-3 flex items-baseline space-x-2">
+            <span
+              className={`text-h2 font-semibold ${
+                isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+              }`}
+            >
+              {isPositive ? '+' : ''}₹{(p.total_pnl / 1000).toFixed(1)}K
+            </span>
+            <Badge variant={isPositive ? 'emerald' : 'red'} size="sm">
+              {isPositive ? '+' : ''}
+              {p.total_pnl_pct}%
+            </Badge>
+          </div>
+        </Card>
+
+        <Card className="flex flex-col justify-between">
+          <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">
+            Today's P&L
+          </span>
+          <div className="mt-3 flex items-baseline space-x-2">
+            <span
+              className={`text-h2 font-semibold ${
+                p.day_pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+              }`}
+            >
+              {p.day_pnl >= 0 ? '+' : ''}₹{formatNumber(p.day_pnl)}
+            </span>
+            <Badge variant={p.day_pnl >= 0 ? 'emerald' : 'red'} size="sm">
+              {p.day_pnl_pct >= 0 ? '+' : ''}
+              {p.day_pnl_pct}%
+            </Badge>
+          </div>
+        </Card>
+
+        <Card className="flex flex-col justify-between">
+          <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">
+            Total Holdings
+          </span>
+          <div className="mt-3">
+            <span className="text-h2 font-semibold text-indigo-600 dark:text-indigo-400">
+              {p.holdings_count} Stocks
+            </span>
+          </div>
+        </Card>
+      </div>
+
+      {/* Main Grid: Holdings Table & Allocation / AI Rebalancing */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Holdings Table */}
-        <motion.div variants={fadeInUp} transition={{ delay: 0.1 }} className="lg:col-span-2">
-          <div className="glass-card overflow-hidden">
-            <div className="p-4 border-b border-dark-600/30">
-              <h3 className="font-semibold">📋 Holdings</h3>
+        {/* Left Column: Detailed Holdings Table */}
+        <Card size="large" noPadding className="lg:col-span-2 overflow-hidden flex flex-col justify-between">
+          <div>
+            <div className="p-6 border-b border-slate-200 dark:border-white/[0.06] flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Portfolio Holdings
+                </h3>
+                <p className="text-caption text-slate-500 dark:text-slate-400">
+                  Real-time equity positions & cost basis
+                </p>
+              </div>
+              <Button variant="outline" size="sm">
+                Export CSV
+              </Button>
             </div>
+
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="sys-table">
                 <thead>
-                  <tr className="text-xs text-dark-300 border-b border-dark-600/20">
-                    <th className="text-left p-3 font-medium">Stock</th>
-                    <th className="text-right p-3 font-medium">Qty</th>
-                    <th className="text-right p-3 font-medium">Avg Price</th>
-                    <th className="text-right p-3 font-medium">CMP</th>
-                    <th className="text-right p-3 font-medium">Invested</th>
-                    <th className="text-right p-3 font-medium">Current</th>
-                    <th className="text-right p-3 font-medium">P&L</th>
-                    <th className="text-right p-3 font-medium">P&L %</th>
+                  <tr>
+                    <th>Asset</th>
+                    <th className="text-right">Qty</th>
+                    <th className="text-right">Avg Price</th>
+                    <th className="text-right">CMP</th>
+                    <th className="text-center">Trend</th>
+                    <th className="text-right">P&L</th>
+                    <th className="text-right">P&L %</th>
                   </tr>
                 </thead>
                 <tbody>
                   {p.holdings.map((h) => {
                     const pos = h.pnl >= 0;
                     return (
-                      <tr key={h.symbol} className="border-b border-dark-600/10 hover:bg-dark-700/20 transition-colors">
-                        <td className="p-3">
-                          <Link href={`/stocks/${h.symbol}`} className="hover:text-accent-blue transition-colors">
-                            <div className="font-medium text-sm">{h.symbol}</div>
-                            <div className="text-xs text-dark-400">{h.name}</div>
+                      <tr key={h.symbol}>
+                        <td>
+                          <Link href={`/stocks/${h.symbol}`} className="group">
+                            <div className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                              {h.symbol}
+                            </div>
+                            <div className="text-caption text-slate-500 dark:text-slate-400">
+                              {h.name}
+                            </div>
                           </Link>
                         </td>
-                        <td className="text-right p-3 text-sm">{h.qty}</td>
-                        <td className="text-right p-3 text-sm">₹{formatNumber(h.avg_price)}</td>
-                        <td className="text-right p-3 text-sm font-medium">₹{formatNumber(h.current_price)}</td>
-                        <td className="text-right p-3 text-sm text-dark-300">₹{(h.invested / 1000).toFixed(1)}K</td>
-                        <td className="text-right p-3 text-sm">₹{(h.current_value / 1000).toFixed(1)}K</td>
-                        <td className={`text-right p-3 text-sm font-medium ${pos ? 'text-accent-green' : 'text-accent-red'}`}>
+                        <td className="text-right font-medium">{h.qty}</td>
+                        <td className="text-right text-slate-600 dark:text-slate-400">
+                          ₹{formatNumber(h.avg_price)}
+                        </td>
+                        <td className="text-right font-semibold">
+                          ₹{formatNumber(h.current_price)}
+                        </td>
+                        <td className="text-center py-3">
+                          <Sparkline
+                            data={[h.avg_price, (h.avg_price + h.current_price) / 2, h.current_price]}
+                            isPositive={pos}
+                            width={56}
+                            height={20}
+                          />
+                        </td>
+                        <td
+                          className={`text-right font-medium ${
+                            pos ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+                          }`}
+                        >
                           {pos ? '+' : ''}₹{formatNumber(h.pnl)}
                         </td>
-                        <td className={`text-right p-3 text-sm font-bold ${pos ? 'text-accent-green' : 'text-accent-red'}`}>
-                          {pos ? '+' : ''}{h.pnl_pct}%
+                        <td className="text-right">
+                          <Badge variant={pos ? 'emerald' : 'red'} size="sm">
+                            {pos ? '+' : ''}
+                            {h.pnl_pct}%
+                          </Badge>
                         </td>
                       </tr>
                     );
@@ -83,77 +171,81 @@ export default function PortfolioPage() {
               </table>
             </div>
           </div>
-        </motion.div>
+        </Card>
 
-        {/* Right Column */}
-        <motion.div variants={fadeInUp} transition={{ delay: 0.2 }} className="space-y-6">
-          {/* Sector Allocation */}
-          <div className="glass-card p-6">
-            <h3 className="font-semibold mb-4">📊 Sector Allocation</h3>
+        {/* Right Column: Sector Breakdown & AI Rebalancing */}
+        <div className="space-y-6">
+          {/* Sector Allocation Card */}
+          <Card className="space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
+              <div className="flex items-center space-x-2">
+                <PieIcon className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Sector Allocation
+                </h3>
+              </div>
+              <span className="text-caption text-slate-500">Target Balanced</span>
+            </div>
+
             <div className="space-y-3">
               {Object.entries(p.sector_allocation)
                 .sort(([, a], [, b]) => (b as number) - (a as number))
-                .map(([sector, pct]) => {
-                  const colors = ['bg-accent-blue', 'bg-accent-purple', 'bg-accent-green', 'bg-accent-orange', 'bg-accent-cyan', 'bg-accent-pink'];
-                  const idx = Object.keys(p.sector_allocation).indexOf(sector);
-                  return (
-                    <div key={sector}>
-                      <div className="flex items-center justify-between text-sm mb-1">
-                        <span className="text-dark-200">{sector}</span>
-                        <span className="font-medium">{pct as number}%</span>
-                      </div>
-                      <div className="w-full h-2 bg-dark-700 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${colors[idx % colors.length]}`} style={{ width: `${pct as number}%` }} />
-                      </div>
+                .map(([sector, pct]) => (
+                  <div key={sector} className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-700 dark:text-slate-300 font-medium">
+                        {sector}
+                      </span>
+                      <span className="font-semibold text-slate-900 dark:text-slate-100">
+                        {pct as number}%
+                      </span>
                     </div>
-                  );
-                })}
+                    <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-indigo-600 dark:bg-indigo-500 rounded-full"
+                        style={{ width: `${pct as number}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
             </div>
-          </div>
+          </Card>
 
-          {/* AI Suggestions */}
-          <div className="glass-card p-6">
-            <h3 className="font-semibold mb-4">🤖 AI Suggestions</h3>
+          {/* AI Rebalancing Recommendations Card */}
+          <Card className="space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
+              <div className="flex items-center space-x-2">
+                <RefreshCw className="w-4 h-4 text-amber-500" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  AI Rebalancing Insights
+                </h3>
+              </div>
+            </div>
+
             <div className="space-y-3">
-              <div className="p-3 rounded-xl bg-yellow-500/5 border border-yellow-500/15">
-                <div className="text-sm font-medium text-yellow-400">⚠️ High IT Concentration (32.5%)</div>
-                <div className="text-xs text-dark-300 mt-1">Consider reducing IT exposure below 30% for better diversification.</div>
+              <div className="p-3 rounded-btn bg-amber-500/10 border border-amber-500/20">
+                <div className="flex items-center space-x-2 text-xs font-semibold text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span>High IT Sector Weight (32.5%)</span>
+                </div>
+                <p className="text-caption text-slate-600 dark:text-slate-400 mt-1">
+                  Consider trimming IT exposure by 4% to reduce concentration risk ahead of earnings.
+                </p>
               </div>
-              <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/15">
-                <div className="text-sm font-medium text-accent-blue">📅 Rebalancing Due</div>
-                <div className="text-xs text-dark-300 mt-1">Quarterly rebalancing recommended to maintain target allocations.</div>
-              </div>
-              <div className="p-3 rounded-xl bg-green-500/5 border border-green-500/15">
-                <div className="text-sm font-medium text-accent-green">💡 Add Healthcare</div>
-                <div className="text-xs text-dark-300 mt-1">Consider pharma stocks for defensive positioning.</div>
-              </div>
-            </div>
-          </div>
 
-          {/* Performance Summary */}
-          <div className="glass-card p-6">
-            <h3 className="font-semibold mb-4">🏆 Performance</h3>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-dark-300">Best Performer</span>
-                <Link href={`/stocks/${p.top_performer}`} className="font-medium text-accent-green hover:underline">{p.top_performer}</Link>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-dark-300">Underperformer</span>
-                <Link href={`/stocks/${p.worst_performer}`} className="font-medium text-accent-orange hover:underline">{p.worst_performer}</Link>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-dark-300">XIRR</span>
-                <span className="font-medium text-accent-green">+14.2%</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-dark-300">Sharpe Ratio</span>
-                <span className="font-medium">1.8</span>
+              <div className="p-3 rounded-btn bg-indigo-500/10 border border-indigo-500/20">
+                <div className="flex items-center space-x-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                  <Lightbulb className="w-3.5 h-3.5 shrink-0" />
+                  <span>Defensive Allocation Opportunity</span>
+                </div>
+                <p className="text-caption text-slate-600 dark:text-slate-400 mt-1">
+                  Add 3-5% weight in Pharma (e.g. SUNPHARMA) to balance macro volatility.
+                </p>
               </div>
             </div>
-          </div>
-        </motion.div>
+          </Card>
+        </div>
       </div>
-    </motion.div>
+    </div>
   );
 }

@@ -1,24 +1,18 @@
-// @ts-nocheck
 'use client';
 
-import { motion } from 'framer-motion';
-import { useState } from 'react';
-
-const fadeInUp = {
-  initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0 },
-};
+import React, { useState } from 'react';
+import { Settings, Key, Shield, Bell, Check, User, Server } from 'lucide-react';
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Badge } from '@/components/ui/Badge';
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
     notifications: true,
     emailAlerts: false,
-    darkMode: true,
     autoRefresh: true,
-    refreshInterval: '30',
     riskTolerance: 'moderate',
-    currency: 'INR',
-    language: 'en',
   });
 
   const [apiKeys, setApiKeys] = useState({
@@ -36,125 +30,181 @@ export default function SettingsPage() {
   };
 
   return (
-    <motion.div initial="initial" animate="animate" className="space-y-6 max-w-3xl mx-auto">
-      <motion.div variants={fadeInUp}>
-        <h2 className="text-lg font-semibold">Settings</h2>
-        <p className="text-sm text-dark-300">Configure your AI Stock Platform preferences</p>
-      </motion.div>
+    <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+      {/* Top Header */}
+      <div>
+        <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
+          Account & Platform Settings
+        </h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          Manage system configurations, API credentials, and notification thresholds
+        </p>
+      </div>
 
-      {/* General Settings */}
-      <motion.div variants={fadeInUp} transition={{ delay: 0.1 }} className="glass-card p-6">
-        <h3 className="font-semibold mb-4">⚙️ General</h3>
+      {/* Preferences Section */}
+      <Card size="large" className="space-y-6">
+        <div className="flex items-center space-x-2 border-b border-slate-100 dark:border-white/[0.06] pb-4">
+          <Settings className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            System Preferences
+          </h3>
+        </div>
+
         <div className="space-y-4">
           {[
-            { key: 'notifications', label: 'Push Notifications', desc: 'Receive alerts for buy/sell signals' },
-            { key: 'emailAlerts', label: 'Email Alerts', desc: 'Get daily market summary via email' },
-            { key: 'darkMode', label: 'Dark Mode', desc: 'Use dark theme (recommended)' },
-            { key: 'autoRefresh', label: 'Auto Refresh Data', desc: 'Automatically refresh market data' },
+            {
+              key: 'notifications',
+              label: 'Push Notifications',
+              desc: 'Instant alerts for AI buy/sell signal triggers',
+            },
+            {
+              key: 'emailAlerts',
+              label: 'Daily Market Summary',
+              desc: 'Receive end-of-day portfolio and sentiment reports',
+            },
+            {
+              key: 'autoRefresh',
+              label: 'Real-Time Telemetry Auto-Refresh',
+              desc: 'Automatically poll NSE WebSocket feeds every 10 seconds',
+            },
           ].map((item) => (
-            <div key={item.key} className="flex items-center justify-between py-2">
+            <div
+              key={item.key}
+              className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-white/[0.04] last:border-none"
+            >
               <div>
-                <div className="text-sm font-medium">{item.label}</div>
-                <div className="text-xs text-dark-400">{item.desc}</div>
+                <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                  {item.label}
+                </span>
+                <p className="text-caption text-slate-500">{item.desc}</p>
               </div>
+
               <button
-                onClick={() => setSettings({ ...settings, [item.key]: !settings[item.key as keyof typeof settings] })}
-                className={`w-11 h-6 rounded-full relative transition-all ${settings[item.key as keyof typeof settings] ? 'bg-accent-blue' : 'bg-dark-600'}`}
+                onClick={() =>
+                  setSettings({
+                    ...settings,
+                    [item.key]: !settings[item.key as keyof typeof settings],
+                  })
+                }
+                className={`w-11 h-6 rounded-full relative transition-colors duration-150 ease-out ${
+                  settings[item.key as keyof typeof settings]
+                    ? 'bg-indigo-600'
+                    : 'bg-slate-200 dark:bg-slate-800'
+                }`}
               >
-                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${settings[item.key as keyof typeof settings] ? 'left-5.5 translate-x-0' : 'left-0.5'}`}
-                  style={{ left: settings[item.key as keyof typeof settings] ? '22px' : '2px' }}
+                <span
+                  className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-150 ease-out ${
+                    settings[item.key as keyof typeof settings] ? 'left-6' : 'left-1'
+                  }`}
                 />
               </button>
             </div>
           ))}
 
-          <div className="flex items-center justify-between py-2">
+          <div className="flex items-center justify-between pt-2">
             <div>
-              <div className="text-sm font-medium">Risk Tolerance</div>
-              <div className="text-xs text-dark-400">AI will adjust recommendations based on your risk profile</div>
+              <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                Risk Tolerance Profile
+              </span>
+              <p className="text-caption text-slate-500">
+                AI rebalancing engine adapts stop-loss sensitivity accordingly
+              </p>
             </div>
+
             <select
               value={settings.riskTolerance}
               onChange={(e) => setSettings({ ...settings, riskTolerance: e.target.value })}
-              className="bg-dark-700 border border-dark-600/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-accent-blue/50"
+              className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-white/[0.08] text-slate-900 dark:text-slate-100 rounded-input px-3 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
             >
               <option value="conservative">Conservative</option>
               <option value="moderate">Moderate</option>
               <option value="aggressive">Aggressive</option>
             </select>
           </div>
+        </div>
+      </Card>
 
-          <div className="flex items-center justify-between py-2">
-            <div>
-              <div className="text-sm font-medium">Refresh Interval</div>
-              <div className="text-xs text-dark-400">How often to refresh market data</div>
-            </div>
-            <select
-              value={settings.refreshInterval}
-              onChange={(e) => setSettings({ ...settings, refreshInterval: e.target.value })}
-              className="bg-dark-700 border border-dark-600/50 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-accent-blue/50"
-            >
-              <option value="10">10 seconds</option>
-              <option value="30">30 seconds</option>
-              <option value="60">1 minute</option>
-              <option value="300">5 minutes</option>
-            </select>
+      {/* API Credentials */}
+      <Card size="large" className="space-y-6">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-4">
+          <div className="flex items-center space-x-2">
+            <Key className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              API Provider Credentials
+            </h3>
+          </div>
+          <Badge variant="indigo" size="sm">
+            Encrypted Client-Side
+          </Badge>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
+              Finnhub API Key
+            </label>
+            <Input
+              type="password"
+              placeholder="fn_live_..."
+              value={apiKeys.finnhub}
+              onChange={(e) => setApiKeys({ ...apiKeys, finnhub: e.target.value })}
+            />
+          </div>
+
+          <div>
+            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
+              TwelveData API Key
+            </label>
+            <Input
+              type="password"
+              placeholder="td_live_..."
+              value={apiKeys.twelvedata}
+              onChange={(e) => setApiKeys({ ...apiKeys, twelvedata: e.target.value })}
+            />
+          </div>
+
+          <div>
+            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
+              Alpha Vantage Key
+            </label>
+            <Input
+              type="password"
+              placeholder="av_live_..."
+              value={apiKeys.alphaVantage}
+              onChange={(e) => setApiKeys({ ...apiKeys, alphaVantage: e.target.value })}
+            />
+          </div>
+
+          <div>
+            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
+              OpenAI API Key
+            </label>
+            <Input
+              type="password"
+              placeholder="sk-proj-..."
+              value={apiKeys.openai}
+              onChange={(e) => setApiKeys({ ...apiKeys, openai: e.target.value })}
+            />
           </div>
         </div>
-      </motion.div>
+      </Card>
 
-      {/* API Keys */}
-      <motion.div variants={fadeInUp} transition={{ delay: 0.2 }} className="glass-card p-6">
-        <h3 className="font-semibold mb-2">🔑 API Keys</h3>
-        <p className="text-xs text-dark-400 mb-4">Add API keys to enable live market data. The platform works in demo mode without keys.</p>
-        <div className="space-y-3">
-          {[
-            { key: 'finnhub', label: 'Finnhub API Key', placeholder: 'Enter Finnhub API key' },
-            { key: 'twelvedata', label: 'TwelveData API Key', placeholder: 'Enter TwelveData API key' },
-            { key: 'alphaVantage', label: 'Alpha Vantage API Key', placeholder: 'Enter Alpha Vantage API key' },
-            { key: 'openai', label: 'OpenAI API Key', placeholder: 'Enter OpenAI API key for AI assistant' },
-          ].map((item) => (
-            <div key={item.key}>
-              <label className="text-sm font-medium text-dark-200 mb-1 block">{item.label}</label>
-              <input
-                type="password"
-                placeholder={item.placeholder}
-                value={apiKeys[item.key as keyof typeof apiKeys]}
-                onChange={(e) => setApiKeys({ ...apiKeys, [item.key]: e.target.value })}
-                className="w-full px-4 py-2.5 rounded-xl bg-dark-700/50 border border-dark-600/50 text-sm text-white placeholder-dark-400 focus:outline-none focus:border-accent-blue/50 transition-all"
-              />
-            </div>
-          ))}
-        </div>
-      </motion.div>
-
-      {/* About */}
-      <motion.div variants={fadeInUp} transition={{ delay: 0.3 }} className="glass-card p-6">
-        <h3 className="font-semibold mb-2">ℹ️ About</h3>
-        <div className="space-y-2 text-sm text-dark-300">
-          <div className="flex justify-between"><span>Version</span><span className="text-white">1.0.0</span></div>
-          <div className="flex justify-between"><span>Mode</span><span className="text-accent-orange">Demo</span></div>
-          <div className="flex justify-between"><span>AI Models</span><span className="text-white">XGBoost, LightGBM, Neural Net, Prophet</span></div>
-          <div className="flex justify-between"><span>Stocks Covered</span><span className="text-white">NIFTY 50</span></div>
-        </div>
-      </motion.div>
-
-      {/* Save Button */}
-      <motion.div variants={fadeInUp} transition={{ delay: 0.4 }}>
-        <button
-          onClick={handleSave}
-          className={`w-full py-3 rounded-xl font-semibold transition-all text-sm ${
-            saved
-              ? 'bg-accent-green text-white'
-              : 'bg-gradient-accent text-white hover:opacity-90 hover:shadow-glow'
-          }`}
-        >
-          {saved ? '✓ Settings Saved' : 'Save Settings'}
-        </button>
-        <p className="text-xs text-dark-500 text-center mt-2">
-          ⚠️ AI analysis is for educational purposes only. Not financial advice.
+      {/* Save Action Bar */}
+      <div className="flex items-center justify-between pt-2">
+        <p className="text-caption text-slate-500">
+          Changes will take effect immediately upon saving.
         </p>
-      </motion.div>
-    </motion.div>
+
+        <Button
+          variant={saved ? 'primary' : 'primary'}
+          size="md"
+          onClick={handleSave}
+          icon={saved ? <Check className="w-4 h-4" /> : undefined}
+          className={saved ? '!bg-emerald-600' : ''}
+        >
+          {saved ? 'Settings Saved' : 'Save Changes'}
+        </Button>
+      </div>
+    </div>
   );
 }
