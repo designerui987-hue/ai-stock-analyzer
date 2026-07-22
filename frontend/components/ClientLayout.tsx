@@ -12,16 +12,16 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const pathname = usePathname();
 
   useEffect(() => {
-    // Enable dark mode by default on root HTML
+    // Default to Day Mode (Light Mode) as requested
     if (typeof document !== 'undefined') {
-      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('dark');
     }
   }, []);
 
   const isPublicPage = pathname === '/' || pathname === '/login' || pathname === '/register';
 
   if (!isLoggedIn && isPublicPage) {
-    return <div className="bg-slate-50 dark:bg-[#0B0F17] min-h-screen">{children}</div>;
+    return <div className="bg-slate-50 dark:bg-[#0B0F17] min-h-screen text-slate-900 dark:text-slate-100">{children}</div>;
   }
 
   return (

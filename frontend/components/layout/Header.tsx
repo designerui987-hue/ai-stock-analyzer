@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { Bell, Search, Sun, Moon, Command } from 'lucide-react';
 import { CommandPalette } from '@/components/ui/CommandPalette';
@@ -19,7 +19,8 @@ const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
 export default function Header() {
   const pathname = usePathname();
   const [cmdOpen, setCmdOpen] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  // Default to Day Mode (Light Mode)
+  const [isDarkMode, setIsDarkMode] = useState(false);
 
   const isStock = pathname.startsWith('/stocks/');
   const sym = isStock ? pathname.split('/')[2]?.toUpperCase() : null;
@@ -31,9 +32,14 @@ export default function Header() {
       : { title: 'StockAI Platform', sub: 'AI Market Intelligence' });
 
   const toggleTheme = () => {
-    setIsDarkMode(!isDarkMode);
+    const nextDark = !isDarkMode;
+    setIsDarkMode(nextDark);
     if (typeof document !== 'undefined') {
-      document.documentElement.classList.toggle('dark');
+      if (nextDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
     }
   };
 
@@ -41,7 +47,7 @@ export default function Header() {
 
   return (
     <>
-      <header className="h-16 flex items-center justify-between px-6 shrink-0 sticky top-0 z-30 bg-white/80 dark:bg-[#0B0F17]/80 backdrop-blur-md border-b border-slate-200 dark:border-white/[0.06]">
+      <header className="h-16 flex items-center justify-between px-6 shrink-0 sticky top-0 z-30 bg-white/90 dark:bg-[#0B0F17]/90 backdrop-blur-md border-b border-slate-200 dark:border-white/[0.06] transition-colors">
         {/* Page Title & Subtitle */}
         <div className="flex items-center space-x-4 min-w-0">
           <div className="min-w-0">
@@ -56,7 +62,7 @@ export default function Header() {
           <div
             className={`hidden md:inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-caption font-medium border ${
               marketOpen
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-white/5'
             }`}
           >
@@ -88,9 +94,9 @@ export default function Header() {
           <button
             onClick={toggleTheme}
             className="p-2 rounded-input text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors"
-            title="Toggle theme"
+            title={isDarkMode ? 'Switch to Day Mode' : 'Switch to Dark Mode'}
           >
-            {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            {isDarkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-slate-600" />}
           </button>
 
           {/* Notifications */}
