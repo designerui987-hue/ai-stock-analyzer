@@ -4,11 +4,9 @@ import { useEffect } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import MobileNav from '@/components/layout/MobileNav';
-import { useAuth } from '@/store/useAuth';
 import { usePathname } from 'next/navigation';
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
-  const { isLoggedIn } = useAuth();
   const pathname = usePathname();
 
   useEffect(() => {
@@ -18,12 +16,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     }
   }, []);
 
-  const isPublicPage = pathname === '/' || pathname === '/login' || pathname === '/register';
+  const isAuthPage = pathname === '/login' || pathname === '/register';
 
-  if (!isLoggedIn && isPublicPage) {
+  // Render auth pages (login/register) directly without sidebar layout if visited explicitly
+  if (isAuthPage) {
     return <div className="bg-slate-50 dark:bg-[#0B0F17] min-h-screen text-slate-900 dark:text-slate-100">{children}</div>;
   }
 
+  // Render full dashboard layout for all main platform pages
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-[#0B0F17] text-slate-900 dark:text-slate-100 antialiased">
       {/* Desktop Sidebar */}
