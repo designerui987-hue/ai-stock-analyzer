@@ -1,0 +1,84 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Signal {
+  id               String    @id @default(uuid())
+  symbol           String
+  signal_type      String    // BUY | SELL
+  issued_at        DateTime  @default(now())
+  entry_price      Float
+  target_price     Float
+  stop_loss_price  Float
+  confidence_pct   Float
+  model_breakdown  String    // JSON stored as string
+  status           String    @default("OPEN") // OPEN | TARGET_HIT | SL_HIT | EXPIRED
+  closed_at        DateTime?
+  closed_price     Float?
+  realized_pnl_pct Float?
+  horizon_days     Int
+  rationale        String
+}
+
+model AlertPreference {
+  id                        String   @id @default(uuid())
+  user_id                   String   @unique @default("demo_user")
+  channels_enabled          String   @default("{\"web_push\":true,\"telegram\":false,\"whatsapp\":false}")
+  telegram_chat_id          String?
+  whatsapp_number           String?
+  web_push_subscription     String?
+  alert_types_subscribed    String   @default("{\"new_signal\":true,\"target_hit\":true,\"sl_hit\":true,\"breakout\":true,\"risk_warning\":true,\"watchlist_move\":false}")
+  quiet_hours               String   @default("{\"enabled\":false,\"start\":\"22:00\",\"end\":\"07:00\"}")
+  min_confidence_threshold  Float    @default(70)
+  updated_at                DateTime @updatedAt
+}
+
+model AlertLog {
+  id              String   @id @default(uuid())
+  user_id         String
+  channel         String   // WEB_PUSH | TELEGRAM | WHATSAPP
+  alert_type      String   // NEW_SIGNAL | TARGET_HIT | SL_HIT | BREAKOUT | RISK_WARNING | WATCHLIST_MOVE
+  symbol          String
+  message_body    String
+  sent_at         DateTime @default(now())
+  delivery_status String   // SENT | FAILED | PENDING
+}
+
+model BrokerConnection {
+  id               String   @id @default(uuid())
+  user_id          String   @unique @default("demo_user")
+  broker           String   @default("KITE") // KITE | UPSTOX | ANGELONE
+  access_token     String   // Encrypted token at rest
+  token_expires_at DateTime
+  connected_at     DateTime @default(now())
+  status           String   @default("CONNECTED") // CONNECTED | EXPIRED | DISCONNECTED
+}
+
+model OrderLog {
+  id               String   @id @default(uuid())
+  user_id          String
+  broker           String   @default("KITE")
+  symbol           String
+  transaction_type String   // BUY | SELL
+  quantity         Int
+  order_type       String   // MARKET | LIMIT | SL | SL_M
+  price            Float?
+  trigger_price    Float?
+  product_type     String   // CNC | MIS | NRML
+  source           String?  // signal_id
+  broker_order_id  String?
+  status           String   // PLACED | COMPLETE | REJECTED | CANCELLED
+  placed_at        DateTime @default(now())
+  response_raw     String   // Raw JSON string
+}
+

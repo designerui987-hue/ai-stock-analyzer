@@ -1,0 +1,219 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design Tokens & System Theme ────────────────────────────────── */
+:root {
+  /* Light Theme (Default) */
+  --bg-main: #F8FAFC;
+  --bg-sidebar: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-surface: #F1F5F9;
+  --bg-hover: #F1F5F9;
+
+  --border: #E5E7EB;
+  --border-muted: #F3F4F6;
+  --border-hover: #D1D5DB;
+
+  --text-primary: #111827;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+
+  --accent-indigo: #6366F1;
+  --accent-blue: #3B82F6;
+  --accent-emerald: #10B981;
+  --accent-amber: #F59E0B;
+  --accent-red: #EF4444;
+}
+
+.dark {
+  /* Dark Theme */
+  --bg-main: #0B0F17;
+  --bg-sidebar: #101827;
+  --bg-card: #121826;
+  --bg-surface: #1E293B;
+  --bg-hover: #1A2333;
+
+  --border: rgba(255, 255, 255, 0.06);
+  --border-muted: rgba(255, 255, 255, 0.04);
+  --border-hover: rgba(255, 255, 255, 0.12);
+
+  --text-primary: #F8FAFC;
+  --text-secondary: #CBD5E1;
+  --text-muted: #64748B;
+
+  --accent-indigo: #6366F1;
+  --accent-blue: #3B82F6;
+  --accent-emerald: #10B981;
+  --accent-amber: #F59E0B;
+  --accent-red: #EF4444;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+}
+
+/* ── Typography Scale & Standards ───────────────────────────────── */
+.text-display {
+  font-size: 2rem; /* 32px */
+  line-height: 2.25rem;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.text-h1 {
+  font-size: 1.75rem; /* 28px */
+  line-height: 2rem;
+  letter-spacing: -0.015em;
+  font-weight: 600;
+}
+
+.text-h2 {
+  font-size: 1.5rem; /* 24px */
+  line-height: 1.75rem;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+
+.text-h3 {
+  font-size: 1.25rem; /* 20px */
+  line-height: 1.5rem;
+  font-weight: 600;
+}
+
+.text-body {
+  font-size: 0.875rem; /* 14px */
+  line-height: 1.25rem;
+  font-weight: 400;
+}
+
+.text-caption {
+  font-size: 0.75rem; /* 12px */
+  line-height: 1rem;
+  font-weight: 400;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+/* ── Base Component Classes ────────────────────────────────────── */
+@layer components {
+  /* Premium Cards */
+  .sys-card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    transition: transform 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out;
+  }
+
+  .sys-card-lg {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 24px;
+    transition: transform 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out;
+  }
+
+  .sys-card-interactive:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-hover);
+  }
+
+  /* Status Badges */
+  .badge-emerald {
+    background-color: rgba(16, 185, 129, 0.1);
+    color: #10B981;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+  }
+
+  .badge-red {
+    background-color: rgba(239, 68, 68, 0.1);
+    color: #EF4444;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+  }
+
+  .badge-amber {
+    background-color: rgba(245, 158, 11, 0.1);
+    color: #F59E0B;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+
+  .badge-indigo {
+    background-color: rgba(99, 102, 241, 0.1);
+    color: #6366F1;
+    border: 1px solid rgba(99, 102, 241, 0.2);
+  }
+
+  .badge-neutral {
+    background-color: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+
+  /* Table styles */
+  .sys-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .sys-table th {
+    position: sticky;
+    top: 0;
+    background-color: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    z-index: 10;
+  }
+
+  .sys-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-muted);
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    transition: background-color 150ms ease-out;
+  }
+
+  .sys-table tr:hover td {
+    background-color: var(--bg-hover);
+  }
+}
