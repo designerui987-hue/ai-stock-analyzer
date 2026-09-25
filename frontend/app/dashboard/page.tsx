@@ -25,8 +25,8 @@ import {
 } from '@/lib/data';
 
 const CHART_DATA = [
-  { time: 'Jul 1',  value: 1183500 },
-  { time: 'Jul 5',  value: 1198200 },
+  { time: 'Jul 1', value: 1183500 },
+  { time: 'Jul 5', value: 1198200 },
   { time: 'Jul 10', value: 1172300 },
   { time: 'Jul 15', value: 1235600 },
   { time: 'Jul 18', value: 1264800 },
@@ -393,9 +393,9 @@ export default function DashboardPage() {
                   <Badge
                     variant={
                       alert.type.includes('sell') ? 'red'
-                      : alert.type.includes('buy') ? 'emerald'
-                      : alert.type.includes('risk') ? 'amber'
-                      : 'indigo'
+                        : alert.type.includes('buy') ? 'emerald'
+                          : alert.type.includes('risk') ? 'amber'
+                            : 'indigo'
                     }
                     size="sm"
                   >

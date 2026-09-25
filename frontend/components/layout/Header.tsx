@@ -1,10 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { Bell, Search, Sun, Moon, Command } from 'lucide-react';
 import { CommandPalette } from '@/components/ui/CommandPalette';
-import { DEMO_STOCKS } from '@/lib/data';
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
   '/dashboard': { title: 'Dashboard', sub: 'Institutional portfolio performance and AI signals' },

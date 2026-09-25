@@ -119,10 +119,7 @@ export default function StockAnalysisPage() {
   };
 
   const stock = liveStock?.live_quote ? { ...demoStock, price: liveStock.live_quote.price, change_pct: liveStock.live_quote.change_pct, name: liveStock.live_quote.name || demoStock.name, market_cap: liveStock.live_quote.market_cap || demoStock.market_cap } : demoStock;
-  const ai = liveStock?.ai_analysis ? adaptBackendAIToFrontend(liveStock.ai_analysis, liveStock.technical) : adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading AI Data...', factors: [], prediction_models: {} });
-  
-  // Guard clause for early rendering while fetching
-  if (!ai) return <div className="p-8 text-center animate-pulse">Loading Quantum Analysis...</div>;
+  const ai = (liveStock?.ai_analysis ? adaptBackendAIToFrontend(liveStock.ai_analysis, liveStock.technical) : null) || adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading AI Data...', factors: [], prediction_models: {} })!;
   
   const isUp = stock.change_pct >= 0;
   const [watchlisted, setWatchlisted] = useState(false);
@@ -134,9 +131,9 @@ export default function StockAnalysisPage() {
   const sizingResult = calculatePositionSize({
     account_capital: calcCapital,
     risk_pct: calcRiskPct,
-    entry_price: ai.entry,
-    stop_loss_price: ai.stopLoss,
-    target_price: ai.target,
+    entry_price: ai?.entry ?? stock.price,
+    stop_loss_price: ai?.stopLoss ?? stock.price,
+    target_price: ai?.target ?? stock.price,
     symbol: stock.symbol,
   });
 
