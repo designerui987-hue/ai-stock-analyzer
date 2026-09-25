@@ -1,38 +1,23 @@
 """Stock analysis API endpoints."""
 
-import random
+import logging
 from fastapi import APIRouter, HTTPException
 from data.demo_stocks import NIFTY50_STOCKS, generate_chart_data, DEMO_NEWS
 from ai_models.prediction_engine import prediction_engine
 from ai_models.sentiment_analyzer import sentiment_analyzer, risk_analyzer
 
 router = APIRouter()
-
-
-def generate_technical_indicators(stock: dict) -> dict:
-    """Generate realistic technical indicators for a stock."""
-    price = stock["price"]
-    return {
-        "rsi": round(random.uniform(30, 70), 2),
-        "macd": round(random.uniform(-10, 10), 4),
-        "macd_signal": round(random.uniform(-8, 8), 4),
-        "sma_20": round(price * random.uniform(0.97, 1.03), 2),
-        "sma_50": round(price * random.uniform(0.94, 1.06), 2),
-        "sma_200": round(price * random.uniform(0.88, 1.12), 2),
-        "ema_12": round(price * random.uniform(0.98, 1.02), 2),
-        "ema_26": round(price * random.uniform(0.96, 1.04), 2),
-        "bollinger_upper": round(price * 1.05, 2),
-        "bollinger_lower": round(price * 0.95, 2),
-        "atr": round(price * random.uniform(0.01, 0.04), 2),
-        "adx": round(random.uniform(15, 50), 2),
-    }
+logger = logging.getLogger("api.stocks")
 
 
 @router.get("/search")
 async def search_stocks(q: str = ""):
     """Search stocks by symbol or name."""
     if not q:
-        return list(NIFTY50_STOCKS.keys())
+        return [
+            {"symbol": sym, "name": data["name"], "sector": data["sector"], "price": data["price"], "change_pct": data["change_pct"]}
+            for sym, data in NIFTY50_STOCKS.items()
+        ]
 
     q_upper = q.upper()
     results = []
@@ -45,6 +30,15 @@ async def search_stocks(q: str = ""):
                 "price": data["price"],
                 "change_pct": data["change_pct"],
             })
+
+    if not results and len(q_upper) >= 2:
+        results.append({
+            "symbol": q_upper,
+            "name": f"{q_upper} (Live Equity)",
+            "sector": "NSE Equity",
+            "price": 0,
+            "change_pct": 0,
+        })
     return results
 
 
@@ -67,25 +61,62 @@ async def list_stocks():
 
 
 @router.get("/{symbol}")
-async def get_stock_analysis(symbol: str):
-    """Get full AI analysis for a stock."""
+def get_stock_analysis(symbol: str):
+    """Get full AI analysis for any stock symbol."""
     symbol = symbol.upper()
-    stock = NIFTY50_STOCKS.get(symbol)
-    if not stock:
-        raise HTTPException(status_code=404, detail=f"Stock {symbol} not found")
+    demo_stock = NIFTY50_STOCKS.get(symbol)
 
-    # Generate analysis
-    ai_analysis = prediction_engine.predict(symbol)
-    technical = generate_technical_indicators(stock)
+    # ── Step 1: Fetch live price + real quant-engine technicals ──────────────
+    live_data = prediction_engine.fetch_live_data(symbol)
+
+    if live_data and live_data.get("price"):
+        base = demo_stock or {
+            "symbol": symbol,
+            "name": live_data.get("name", symbol),
+            "sector": live_data.get("sector", "NSE Equity"),
+            "industry": live_data.get("sector", "Equity"),
+            "market_cap": "Live Market",
+            "week52_high": live_data.get("week52_high", live_data["price"]),
+            "week52_low": live_data.get("week52_low", live_data["price"]),
+            "pe_ratio": live_data.get("pe_ratio", 20.0),
+        }
+        stock = {
+            **base,
+            "price": live_data["price"],
+            "change": round(live_data["price"] * (live_data.get("change_pct", 0) / 100), 2),
+            "change_pct": live_data.get("change_pct", 0),
+            "volume": live_data.get("volume", base.get("volume", 0)),
+            "avg_volume": live_data.get("avg_volume", 0),
+            "week52_high": live_data.get("week52_high", base.get("week52_high", live_data["price"])),
+            "week52_low": live_data.get("week52_low", base.get("week52_low", live_data["price"])),
+            "pe_ratio": live_data.get("pe_ratio", base.get("pe_ratio", 20.0)),
+        }
+        # Always use the real Python quant-engine technicals; never random numbers
+        technical = live_data.get("technicals") or prediction_engine._fallback_technicals(stock["price"])
+        logger.info("[stocks] Live data fetched for %s @ ₹%.2f", symbol, stock["price"])
+
+    elif demo_stock:
+        stock = demo_stock
+        # No live data — use deterministic fallback technicals from quant engine
+        technical = prediction_engine._fallback_technicals(stock["price"])
+        logger.info("[stocks] Using demo fixture for %s (yfinance unavailable)", symbol)
+
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Market data for '{symbol}' could not be fetched. Verify the NSE/BSE symbol.",
+        )
+
+    # ── Step 2: Run AI analysis (NVIDIA Nemotron → deterministic fallback) ──
+    ai_analysis = prediction_engine.predict(symbol, live_data or stock)
+
+    # ── Step 3: Sentiment & risk ──────────────────────────────────────────────
     sentiment = sentiment_analyzer.analyze_stock_sentiment(symbol)
     risk = risk_analyzer.analyze_risk(symbol, stock)
     news = sentiment_analyzer.get_stock_news(symbol)
 
     return {
-        "quote": {
-            "symbol": symbol,
-            **stock,
-        },
+        "quote": {"symbol": symbol, **stock},
         "technical": technical,
         "ai_analysis": ai_analysis,
         "sentiment": sentiment,
@@ -108,7 +139,7 @@ async def get_chart_data(symbol: str, period: str = "1Y"):
 
 
 @router.get("/{symbol}/ai-picks")
-async def get_ai_picks(symbol: str = ""):
+def get_ai_picks(symbol: str = ""):
     """Get AI stock picks."""
     picks = []
     for sym in list(NIFTY50_STOCKS.keys())[:8]:

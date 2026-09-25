@@ -16,6 +16,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
+  Activity,
+  ShoppingBag,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -23,9 +25,11 @@ const NAV = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/portfolio', icon: PieChart, label: 'Portfolio' },
   { href: '/stocks/RELIANCE', icon: TrendingUp, label: 'Stock Analysis' },
+  { href: '/orders', icon: ShoppingBag, label: 'Order Blotter' },
   { href: '/watchlist', icon: Bookmark, label: 'Watchlist' },
   { href: '/assistant', icon: Bot, label: 'AI Assistant' },
   { href: '/insights', icon: Sparkles, label: 'AI Insights' },
+  { href: '/performance', icon: Activity, label: 'Performance Ledger' },
   { href: '/heatmap', icon: Grid, label: 'Market Heatmap' },
   { href: '/settings', icon: Settings, label: 'Settings' },
 ];

@@ -25,20 +25,48 @@ import {
 } from '@/lib/data';
 
 const CHART_DATA = [
-  { time: 'Jul 1', value: 2420000 },
-  { time: 'Jul 5', value: 2435000 },
-  { time: 'Jul 10', value: 2410000 },
-  { time: 'Jul 15', value: 2460000 },
-  { time: 'Jul 18', value: 2485000 },
-  { time: 'Jul 20', value: 2470000 },
-  { time: 'Jul 22', value: 2514200 },
+  { time: 'Jul 1',  value: 1183500 },
+  { time: 'Jul 5',  value: 1198200 },
+  { time: 'Jul 10', value: 1172300 },
+  { time: 'Jul 15', value: 1235600 },
+  { time: 'Jul 18', value: 1264800 },
+  { time: 'Jul 20', value: 1248900 },
+  { time: 'Jul 22', value: 1311875 },
 ];
 
 export default function DashboardPage() {
+  const [indices, setIndices] = React.useState<any[]>(DEMO_INDICES);
+  const [liveGainers, setLiveGainers] = React.useState<any[]>([]);
+  const [liveLosers, setLiveLosers] = React.useState<any[]>([]);
+
+  React.useEffect(() => {
+    import('@/lib/api').then(({ api }) => {
+      api.getMarketOverview()
+        .then(data => {
+          if (data && data.indices && Array.isArray(data.indices)) {
+            setIndices(data.indices);
+          }
+        })
+        .catch(err => console.error(err));
+
+      api.getTopGainers()
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) setLiveGainers(data);
+        })
+        .catch(err => console.error(err));
+
+      api.getTopLosers()
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) setLiveLosers(data);
+        })
+        .catch(err => console.error(err));
+    });
+  }, []);
+
   const pnlPositive = DEMO_PORTFOLIO.total_pnl >= 0;
   const sorted = [...DEMO_STOCKS].sort((a, b) => b.change_pct - a.change_pct);
-  const gainers = sorted.slice(0, 4);
-  const losers = sorted.slice(-4).reverse();
+  const gainers = liveGainers.length > 0 ? liveGainers : sorted.slice(0, 4);
+  const losers = liveLosers.length > 0 ? liveLosers : sorted.slice(-4).reverse();
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
@@ -191,7 +219,7 @@ export default function DashboardPage() {
 
       {/* Market Indices Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {DEMO_INDICES.map((idx) => {
+        {indices.map((idx) => {
           const up = idx.change_pct >= 0;
           return (
             <Card key={idx.symbol} interactive className="p-4">
@@ -262,49 +290,84 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* Center Column: Top Gainers Table */}
-        <Card className="space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
-            <div className="flex items-center space-x-2">
-              <TrendingUp className="w-4 h-4 text-emerald-500" />
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Top Gainers
-              </h3>
+        {/* Center Column: Top Gainers & Top Losers */}
+        <div className="space-y-4">
+          {/* Top Gainers */}
+          <Card className="space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
+              <div className="flex items-center space-x-2">
+                <TrendingUp className="w-4 h-4 text-emerald-500" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Top Gainers
+                </h3>
+              </div>
+              <Link href="/watchlist" className="text-caption text-indigo-600 dark:text-indigo-400 hover:underline">
+                View All
+              </Link>
             </div>
-            <Link href="/watchlist" className="text-caption text-indigo-600 dark:text-indigo-400 hover:underline">
-              View All
-            </Link>
-          </div>
 
-          <div className="space-y-2">
-            {gainers.map((s) => (
-              <Link
-                key={s.symbol}
-                href={`/stocks/${s.symbol}`}
-                className="flex items-center justify-between p-2.5 rounded-btn hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors group"
-              >
-                <div className="min-w-0 pr-2">
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                    {s.symbol}
-                  </p>
-                  <p className="text-caption text-slate-500 dark:text-slate-400 truncate">{s.name}</p>
-                </div>
-
-                <div className="flex items-center space-x-3 shrink-0">
-                  <Sparkline data={[s.price * 0.96, s.price * 0.98, s.price]} isPositive={true} width={64} height={20} />
-                  <div className="text-right">
-                    <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                      ₹{s.price.toLocaleString()}
+            <div className="space-y-1">
+              {gainers.map((s) => (
+                <Link
+                  key={s.symbol}
+                  href={`/stocks/${s.symbol}`}
+                  className="flex items-center justify-between p-2.5 rounded-btn hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors group"
+                >
+                  <div className="min-w-0 pr-2">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                      {s.symbol}
                     </p>
-                    <p className="text-caption font-medium text-emerald-600 dark:text-emerald-400">
+                    <p className="text-caption text-slate-500 dark:text-slate-400 truncate">{s.name}</p>
+                  </div>
+                  <div className="flex items-center space-x-3 shrink-0">
+                    <Sparkline data={[s.price * 0.96, s.price * 0.98, s.price]} isPositive={true} width={56} height={18} />
+                    <p className="text-caption font-medium text-emerald-600 dark:text-emerald-400 w-14 text-right">
                       +{s.change_pct.toFixed(2)}%
                     </p>
                   </div>
-                </div>
+                </Link>
+              ))}
+            </div>
+          </Card>
+
+          {/* Top Losers */}
+          <Card className="space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
+              <div className="flex items-center space-x-2">
+                <TrendingDown className="w-4 h-4 text-red-500" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Top Losers
+                </h3>
+              </div>
+              <Link href="/watchlist" className="text-caption text-indigo-600 dark:text-indigo-400 hover:underline">
+                View All
               </Link>
-            ))}
-          </div>
-        </Card>
+            </div>
+
+            <div className="space-y-1">
+              {losers.map((s) => (
+                <Link
+                  key={s.symbol}
+                  href={`/stocks/${s.symbol}`}
+                  className="flex items-center justify-between p-2.5 rounded-btn hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors group"
+                >
+                  <div className="min-w-0 pr-2">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                      {s.symbol}
+                    </p>
+                    <p className="text-caption text-slate-500 dark:text-slate-400 truncate">{s.name}</p>
+                  </div>
+                  <div className="flex items-center space-x-3 shrink-0">
+                    <Sparkline data={[s.price * 1.04, s.price * 1.02, s.price]} isPositive={false} width={56} height={18} />
+                    <p className="text-caption font-medium text-red-600 dark:text-red-400 w-14 text-right">
+                      {s.change_pct.toFixed(2)}%
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </Card>
+        </div>
 
         {/* Right Column: Key Alerts Stream */}
         <Card className="space-y-4">
@@ -327,8 +390,16 @@ export default function DashboardPage() {
                 className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/40 border border-slate-200/60 dark:border-white/[0.04]"
               >
                 <div className="flex items-center justify-between">
-                  <Badge variant="indigo" size="sm">
-                    {alert.type.replace('_', ' ')}
+                  <Badge
+                    variant={
+                      alert.type.includes('sell') ? 'red'
+                      : alert.type.includes('buy') ? 'emerald'
+                      : alert.type.includes('risk') ? 'amber'
+                      : 'indigo'
+                    }
+                    size="sm"
+                  >
+                    {alert.type.replaceAll('_', ' ')}
                   </Badge>
                   <span className="text-[10px] text-slate-400">{alert.time}</span>
                 </div>

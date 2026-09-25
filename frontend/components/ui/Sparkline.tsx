@@ -18,7 +18,12 @@ export const Sparkline: React.FC<SparklineProps> = ({
   className = '',
 }) => {
   if (!data || data.length < 2) {
-    return <div className={`w-[${width}px] h-[${height}px] bg-slate-100 dark:bg-slate-800 rounded`} />;
+    return (
+      <div
+        className="bg-slate-100 dark:bg-slate-800 rounded"
+        style={{ width: `${width}px`, height: `${height}px` }}
+      />
+    );
   }
 
   const min = Math.min(...data);

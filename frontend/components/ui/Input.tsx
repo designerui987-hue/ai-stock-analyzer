@@ -4,15 +4,22 @@ import React from 'react';
 import { clsx } from 'clsx';
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label?: string;
+  helperText?: string;
   icon?: React.ReactNode;
   suffix?: React.ReactNode;
   error?: string;
 }
 
 export const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, icon, suffix, error, disabled, ...props }, ref) => {
+  ({ className, label, helperText, icon, suffix, error, disabled, ...props }, ref) => {
     return (
-      <div className="w-full">
+      <div className="w-full space-y-1.5">
+        {label && (
+          <label className="text-caption font-medium text-slate-700 dark:text-slate-300 block">
+            {label}
+          </label>
+        )}
         <div className="relative flex items-center w-full">
           {icon && (
             <div className="absolute left-3.5 text-slate-400 dark:text-slate-500 pointer-events-none flex items-center justify-center">
@@ -40,7 +47,11 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             </div>
           )}
         </div>
-        {error && <p className="mt-1.5 text-xs text-red-500">{error}</p>}
+        {error ? (
+          <p className="mt-1 text-xs text-red-500">{error}</p>
+        ) : helperText ? (
+          <p className="mt-1 text-caption text-slate-500 dark:text-slate-400">{helperText}</p>
+        ) : null}
       </div>
     );
   }

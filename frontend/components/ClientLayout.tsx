@@ -10,9 +10,11 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const pathname = usePathname();
 
   useEffect(() => {
-    // Default to Day Mode (Light Mode) as requested
+    // Ensure light mode is the default on initial load
     if (typeof document !== 'undefined') {
       document.documentElement.classList.remove('dark');
+      document.body.style.background = '#F8FAFC';
+      document.body.style.color = '#111827';
     }
   }, []);
 

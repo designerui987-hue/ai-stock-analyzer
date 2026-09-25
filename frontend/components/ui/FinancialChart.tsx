@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useId } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -42,6 +42,10 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({
   className = '',
 }) => {
   const [selectedRange, setSelectedRange] = useState('1M');
+  // Unique gradient ID per chart instance to prevent SVG ID collisions
+  // when multiple charts render on the same page
+  const rawId = useId();
+  const gradientId = `cg-${rawId.replace(/:/g, '')}`;
 
   const handleRangeClick = (range: string) => {
     setSelectedRange(range);
@@ -94,7 +98,7 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 8, right: 12, left: 10, bottom: 0 }}>
             <defs>
-              <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={strokeColor} stopOpacity={0.15} />
                 <stop offset="100%" stopColor={strokeColor} stopOpacity={0.0} />
               </linearGradient>
@@ -127,7 +131,7 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({
                   return (
                     <div className="bg-slate-900 text-white dark:bg-slate-800 border border-slate-700/60 px-3.5 py-2 rounded-lg shadow-elevation text-xs">
                       <div className="text-slate-400 mb-1 font-medium">{item.time}</div>
-                      <div className="text-sm font-semibold text-emerald-400">
+                      <div className="text-sm font-semibold" style={{ color: strokeColor }}>
                         ₹{item.value.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </div>
                     </div>
@@ -141,7 +145,7 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({
               dataKey="value"
               stroke={strokeColor}
               strokeWidth={2.5}
-              fill="url(#chartGradient)"
+              fill={`url(#${gradientId})`}
               activeDot={{ r: 5, stroke: strokeColor, strokeWidth: 2, fill: '#FFFFFF' }}
             />
           </AreaChart>

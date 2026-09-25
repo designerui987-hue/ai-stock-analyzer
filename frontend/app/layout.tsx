@@ -14,8 +14,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className="text-white antialiased" style={{ background: '#080b10' }}>
+    <html lang="en" suppressHydrationWarning>
+      <body className="text-slate-900 antialiased" style={{ background: '#F8FAFC' }} suppressHydrationWarning>
         <ClientLayout>
           {children}
         </ClientLayout>

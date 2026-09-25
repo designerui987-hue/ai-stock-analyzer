@@ -140,8 +140,16 @@ export const api = {
   searchStocks: (q: string) => fetchAPI(`/api/stocks/search?q=${q}`),
   listStocks: () => fetchAPI('/api/stocks/list'),
   getStockAnalysis: (symbol: string) => fetchAPI(`/api/stocks/${symbol}`),
-  getChartData: (symbol: string, period: string = '1Y') =>
-    fetchAPI(`/api/stocks/${symbol}/chart?period=${period}`),
+  getChartData: async (symbol: string, period: string = '1Y') => {
+    const res = await fetch(`/live/stocks/${symbol}/chart?period=${period}`);
+    if (!res.ok) throw new Error('Failed to fetch live chart data');
+    return res.json();
+  },
+  getQuoteData: async (symbol: string) => {
+    const res = await fetch(`/live/stocks/${symbol}/quote`);
+    if (!res.ok) throw new Error('Failed to fetch live quote data');
+    return res.json();
+  },
   getAIPicks: () => fetchAPI('/api/stocks/RELIANCE/ai-picks'),
 
   // Portfolio

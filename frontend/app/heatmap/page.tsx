@@ -1,10 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Grid, Filter, TrendingUp, TrendingDown } from 'lucide-react';
-import { Card } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
 import { DEMO_STOCKS } from '@/lib/data';
 
 function getHeatmapData() {
@@ -17,8 +14,20 @@ function getHeatmapData() {
 }
 
 export default function HeatmapPage() {
-  const sectors = getHeatmapData();
+  const [sectors, setSectors] = useState<Record<string, any[]>>(getHeatmapData());
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
+
+  useEffect(() => {
+    import('@/lib/api').then(({ api }) => {
+      api.getHeatmap()
+        .then((data) => {
+          if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+            setSectors(data);
+          }
+        })
+        .catch((err) => console.error(err));
+    });
+  }, []);
 
   const sectorKeys = Object.keys(sectors);
   const displaySectors = selectedSector
@@ -82,31 +91,30 @@ export default function HeatmapPage() {
                 const isUp = s.change_pct >= 0;
                 return (
                   <Link key={s.symbol} href={`/stocks/${s.symbol}`}>
-                    <Card
-                      interactive
-                      className={`p-4 flex flex-col justify-between h-28 border ${
+                    <div
+                      className={`p-4 rounded-card flex flex-col justify-between h-28 border cursor-pointer transition-all duration-200 hover:-translate-y-[2px] ${
                         isUp
-                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                          : 'bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400'
+                          ? 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/15 hover:border-emerald-500/30'
+                          : 'bg-red-500/10 border-red-500/20 hover:bg-red-500/15 hover:border-red-500/30'
                       }`}
                     >
                       <div>
                         <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">
                           {s.symbol}
                         </span>
-                        <p className="text-caption text-slate-500 truncate">{s.name}</p>
+                        <p className="text-caption text-slate-500 dark:text-slate-400 truncate">{s.name}</p>
                       </div>
 
                       <div className="flex items-baseline justify-between mt-2">
-                        <span className="text-sm font-bold">
+                        <span className={`text-sm font-bold ${isUp ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                           {isUp ? '+' : ''}
                           {s.change_pct.toFixed(2)}%
                         </span>
-                        <span className="text-caption text-slate-500 font-medium">
+                        <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">
                           ₹{s.price.toLocaleString()}
                         </span>
                       </div>
-                    </Card>
+                    </div>
                   </Link>
                 );
               })}

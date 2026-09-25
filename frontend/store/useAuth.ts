@@ -74,9 +74,9 @@ export const useAuth = create<AuthState>()(
       logout: () => {
         authAPI.logout();
         set({
-          isLoggedIn: true,
-          user: { id: 'usr-demo', email: 'investor@stockai.com', username: 'Investor' },
-          token: 'demo-token',
+          isLoggedIn: false,
+          user: null,
+          token: null,
         });
       },
 

@@ -9,11 +9,14 @@ import { DEMO_STOCKS } from '@/lib/data';
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
   '/dashboard': { title: 'Dashboard', sub: 'Institutional portfolio performance and AI signals' },
   '/portfolio': { title: 'Portfolio Management', sub: 'Asset allocation, holdings, and rebalancing recommendations' },
+  '/portfolio/risk': { title: 'Portfolio Risk & Exposure', sub: 'Position sizing, portfolio heat %, and sector concentration alerts' },
+  '/orders': { title: 'Order History Blotter', sub: 'Audit log of orders executed via Zerodha Kite Connect' },
   '/watchlist': { title: 'Watchlist', sub: 'Real-time stock monitoring & alert triggers' },
   '/heatmap': { title: 'Market Heatmap', sub: 'Sector performance treemap & market cap visualization' },
   '/insights': { title: 'AI Insights', sub: 'Daily multi-model ensemble market signals & anomaly alerts' },
+  '/performance': { title: 'Signal Performance Ledger', sub: 'Auditable track record of every AI signal issued with model factors' },
   '/assistant': { title: 'AI Copilot', sub: 'Interactive conversational stock analysis & reasoning' },
-  '/settings': { title: 'Platform Settings', sub: 'Manage API credentials, alerts, and preferences' },
+  '/settings': { title: 'Platform Settings', sub: 'Manage API credentials, alert delivery channels, and risk rules' },
 };
 
 export default function Header() {
@@ -24,11 +27,10 @@ export default function Header() {
 
   const isStock = pathname.startsWith('/stocks/');
   const sym = isStock ? pathname.split('/')[2]?.toUpperCase() : null;
-  const stock = sym ? DEMO_STOCKS.find((s) => s.symbol === sym) : null;
   const meta =
     PAGE_TITLES[pathname] ||
-    (isStock && stock
-      ? { title: `${stock.name} (${stock.symbol})`, sub: `${stock.sector} · Equity Analysis` }
+    (isStock && sym
+      ? { title: `${sym} Live Analysis`, sub: `NSE Real-Time Market Intelligence` }
       : { title: 'StockAI Platform', sub: 'AI Market Intelligence' });
 
   const toggleTheme = () => {
@@ -37,8 +39,12 @@ export default function Header() {
     if (typeof document !== 'undefined') {
       if (nextDark) {
         document.documentElement.classList.add('dark');
+        document.body.style.background = '#0B0F17';
+        document.body.style.color = '#F8FAFC';
       } else {
         document.documentElement.classList.remove('dark');
+        document.body.style.background = '#F8FAFC';
+        document.body.style.color = '#111827';
       }
     }
   };
@@ -116,7 +122,7 @@ export default function Header() {
       </header>
 
       {/* Command Palette Modal */}
-      <CommandPalette isOpen={cmdOpen} onClose={() => setCmdOpen(false)} />
+      <CommandPalette isOpen={cmdOpen} onClose={() => setCmdOpen(false)} onOpen={() => setCmdOpen(true)} />
     </>
   );
 }
