@@ -3,10 +3,11 @@ import yahooFinance from 'yahoo-finance2';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { symbol: string } }
+  { params }: { params: Promise<{ symbol: string }> }
 ) {
   try {
-    const symbol = params.symbol;
+    const { symbol: rawSymbol } = await params;
+    const symbol = rawSymbol.toUpperCase();
     const searchParams = request.nextUrl.searchParams;
     const period = searchParams.get('period') || '1Y';
     
