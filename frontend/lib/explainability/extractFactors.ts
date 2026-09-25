@@ -1,5 +1,5 @@
-import { FEATURE_TEMPLATES } from './factorMapping.ts';
-import type { FactorItem, ModelVote } from './factorMapping.ts';
+import { FEATURE_TEMPLATES } from './factorMapping';
+import type { FactorItem, ModelVote } from './factorMapping';
 
 /**
  * 1. Tree-based Models (XGBoost): Feature Importances / SHAP Mapping

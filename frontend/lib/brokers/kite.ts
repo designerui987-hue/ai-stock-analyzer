@@ -15,7 +15,8 @@ import type {
   OrderStatus,
   PositionItem,
   MarginBalance,
-} from './interface.ts';
+  ProductType,
+} from './interface';
 
 export class KiteBrokerAdapter implements BrokerAdapter {
   brokerName: BrokerType = 'KITE';

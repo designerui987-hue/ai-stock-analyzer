@@ -611,7 +611,7 @@ export default function StockAnalysisPage() {
                     <div>
                       <span className="text-slate-400 block text-[10px] uppercase">Calculated Risk</span>
                       <span className="font-bold text-red-600 dark:text-red-400">
-                        ₹{sizingResult.max_risk_amount.toLocaleString()} ({sizingResult.risk_pct_of_capital}%)
+                        ₹{sizingResult.max_risk_amount.toLocaleString()} ({calcRiskPct}%)
                       </span>
                     </div>
                   </div>

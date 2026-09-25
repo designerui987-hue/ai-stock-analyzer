@@ -66,7 +66,7 @@ export default function PerformanceLedger() {
       case 'TARGET_HIT': return <Badge variant="emerald" size="sm">Target Hit</Badge>;
       case 'SL_HIT': return <Badge variant="red" size="sm">SL Hit</Badge>;
       case 'EXPIRED': return <Badge variant="amber" size="sm">Expired</Badge>;
-      default: return <Badge variant="slate" size="sm">Open</Badge>;
+      default: return <Badge variant="neutral" size="sm">Open</Badge>;
     }
   };
 

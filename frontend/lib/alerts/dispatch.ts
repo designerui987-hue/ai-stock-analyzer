@@ -1,7 +1,7 @@
-import { prisma } from '../prisma.ts';
-import { sendWebPushAlert } from './webPush.ts';
-import { sendTelegramAlert } from './telegram.ts';
-import { sendWhatsAppAlert } from './whatsapp.ts';
+import { prisma } from '../prisma';
+import { sendWebPushAlert } from './webPush';
+import { sendTelegramAlert } from './telegram';
+import { sendWhatsAppAlert } from './whatsapp';
 
 export type AlertType =
   | 'new_signal'
