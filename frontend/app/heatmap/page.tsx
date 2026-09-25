@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { DEMO_STOCKS } from '@/lib/data';
 
@@ -14,8 +14,20 @@ function getHeatmapData() {
 }
 
 export default function HeatmapPage() {
-  const sectors = getHeatmapData();
+  const [sectors, setSectors] = useState<Record<string, any[]>>(getHeatmapData());
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
+
+  useEffect(() => {
+    import('@/lib/api').then(({ api }) => {
+      api.getHeatmap()
+        .then((data) => {
+          if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+            setSectors(data);
+          }
+        })
+        .catch((err) => console.error(err));
+    });
+  }, []);
 
   const sectorKeys = Object.keys(sectors);
   const displaySectors = selectedSector

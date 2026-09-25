@@ -1,0 +1,50 @@
+import { NextRequest, NextResponse } from 'next/server';
+import yahooFinance from 'yahoo-finance2';
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { symbol: string } }
+) {
+  try {
+    const symbol = params.symbol.toUpperCase();
+    const querySymbol = symbol.includes('.') ? symbol : `${symbol}.NS`;
+    
+    const quote = await yahooFinance.quote(querySymbol);
+    
+    if (!quote) {
+      return NextResponse.json({ error: 'Quote not found' }, { status: 404 });
+    }
+    
+    const data = {
+      symbol: symbol,
+      name: quote.longName || quote.shortName || symbol,
+      price: quote.regularMarketPrice || 0,
+      change: quote.regularMarketChange || 0,
+      change_pct: quote.regularMarketChangePercent || 0,
+      volume: quote.regularMarketVolume || 0,
+      market_cap: quote.marketCap ? formatMarketCap(quote.marketCap) : 'N/A',
+      currency: quote.currency,
+      exchange: quote.exchange
+    };
+    
+    return NextResponse.json(data);
+  } catch (error: any) {
+    console.error('Error fetching quote data:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch quote data', details: error.message },
+      { status: 500 }
+    );
+  }
+}
+
+function formatMarketCap(value: number): string {
+  // Assuming the value is in rupees, let's format it in Crores if large enough
+  // In reality yahoo-finance might return marketCap in native currency
+  const inCrores = value / 10000000;
+  if (inCrores >= 100000) {
+    return `${(inCrores / 100000).toFixed(2)}L Cr`; // Lakh Crores
+  } else if (inCrores >= 1) {
+    return `${inCrores.toFixed(2)} Cr`;
+  }
+  return value.toLocaleString();
+}

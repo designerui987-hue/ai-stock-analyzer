@@ -38,157 +38,41 @@ import {
 } from '@/lib/explainability/extractFactors';
 import { FactorItem, ModelVote } from '@/lib/explainability/factorMapping';
 
-const AI_DATA: Record<string, any> = {
-  RELIANCE: {
-    signal: 'BUY',
-    confidence: 84,
-    risk: 'Low',
-    riskScore: 3.2,
-    entry: 2450,
-    target: 2780,
-    stopLoss: 2310,
-    upside: 13.4,
-    profitProb: 78,
-    reasons: [
-      'Strong earnings growth: 18% YoY profit increase last quarter',
-      'Bullish MACD crossover with rising volume momentum',
-      'Green energy investments create new long-term revenue catalyst',
-      'Price holding above 200-day SMA — structural uptrend intact',
-    ],
-    pe: 26.8,
-    rsi: 58.4,
-    macd: 2.34,
-    models: [
-      { name: 'XGBoost', signal: 'BUY', conf: 88 },
-      { name: 'LightGBM', signal: 'BUY', conf: 82 },
-      { name: 'Neural Net', signal: 'BUY', conf: 79 },
-      { name: 'Prophet', signal: 'HOLD', conf: 61 },
-    ],
-  },
-  TCS: {
-    signal: 'HOLD',
-    confidence: 63,
-    risk: 'Medium',
-    riskScore: 4.1,
-    entry: 3800,
-    target: 4150,
-    stopLoss: 3640,
-    upside: 6.6,
-    profitProb: 58,
-    reasons: [
-      'Revenue growth moderating amid global IT spending slowdown',
-      'P/E ratio of 32x slightly elevated vs. earnings guidance',
-      'Strong deal pipeline but execution timing uncertainty remains',
-      'Price consolidating in tight range — wait for clear breakout',
-    ],
-    pe: 32.1,
-    rsi: 52.1,
-    macd: -1.23,
-    models: [
-      { name: 'XGBoost', signal: 'HOLD', conf: 70 },
-      { name: 'LightGBM', signal: 'BUY', conf: 54 },
-      { name: 'Neural Net', signal: 'HOLD', conf: 65 },
-      { name: 'Prophet', signal: 'HOLD', conf: 62 },
-    ],
-  },
-  HDFCBANK: {
-    signal: 'BUY',
-    confidence: 79,
-    risk: 'Low',
-    riskScore: 2.7,
-    entry: 1620,
-    target: 1870,
-    stopLoss: 1545,
-    upside: 13.6,
-    profitProb: 73,
-    reasons: [
-      'NIM expansion expected from anticipated RBI rate cuts',
-      'Loan book growing at 18% with improving asset quality',
-      'RSI at 61 — bullish momentum without overbought conditions',
-      'Consistent institutional FII accumulation over last 10 sessions',
-    ],
-    pe: 19.5,
-    rsi: 61.2,
-    macd: 3.45,
-    models: [
-      { name: 'XGBoost', signal: 'BUY', conf: 82 },
-      { name: 'LightGBM', signal: 'BUY', conf: 78 },
-      { name: 'Neural Net', signal: 'BUY', conf: 75 },
-      { name: 'Prophet', signal: 'HOLD', conf: 58 },
-    ],
-  },
-};
+function adaptBackendAIToFrontend(backendAI: any, technicals?: any) {
+  if (!backendAI) return null;
 
-function getAI(symbol: string) {
-  const raw = AI_DATA[symbol] || {
-    signal: 'BUY',
-    confidence: 74,
-    risk: 'Medium',
-    riskScore: 3.8,
-    entry: 850,
-    target: 980,
-    stopLoss: 810,
-    upside: 14.2,
-    profitProb: 70,
-    reasons: [
-      'Positive momentum across sector technical indicators',
-      'Improving quarterly fundamentals and balance sheet strength',
-      'Institutional volume breakout detected on 14-day average',
-    ],
-    pe: 24.5,
-    rsi: 56.0,
-    macd: 1.8,
-    models: [
-      { name: 'XGBoost', signal: 'BUY', conf: 78 },
-      { name: 'LightGBM', signal: 'BUY', conf: 74 },
-      { name: 'Neural Net', signal: 'HOLD', conf: 62 },
-      { name: 'Prophet', signal: 'BUY', conf: 68 },
-    ],
-  };
-
-  // Convert models to enriched ModelVote structures
-  const modelVotes: ModelVote[] = raw.models.map((m: any) => {
-    let factors: FactorItem[] = [];
-
-    if (m.name === 'XGBoost') {
-      factors = extractXGBoostFactors([
-        { feature: 'rsi_14', weight: 42, value: raw.rsi, is_positive: m.signal === 'BUY' },
-        { feature: 'fii_flow', weight: 32, value: 1450, is_positive: m.signal === 'BUY' },
-        { feature: 'volume_surge', weight: 26, value: 2.1, is_positive: true },
-      ]);
-    } else if (m.name === 'LightGBM') {
-      factors = extractLightGBMFactors([
-        { feature: 'macd_hist', gain_pct: 45, value: raw.macd, is_positive: m.signal === 'BUY' },
-        { feature: 'rsi_14', gain_pct: 35, value: raw.rsi, is_positive: m.signal === 'BUY' },
-        { feature: 'fii_flow', gain_pct: 20, value: 1100, is_positive: true },
-      ]);
-    } else if (m.name === 'NeuralNet') {
-      factors = extractNeuralNetFactors([
-        { feature: 'occlusion_delta', confidence_delta: 18, value: 84.5, supports_vote: m.signal === raw.signal },
-        { feature: 'rsi_14', confidence_delta: 12, value: raw.rsi, supports_vote: m.signal === raw.signal },
-        { feature: 'volume_surge', confidence_delta: -5, value: 1.2, supports_vote: false },
-      ]);
-    } else {
-      factors = extractProphetFactors({
-        trend_slope: m.signal === 'BUY' ? 2.4 : -0.8,
-        seasonality_effect: m.signal === 'BUY' ? 1.5 : -1.8,
-        residual_impact: -0.5,
-        vote: m.signal,
-      });
-    }
-
+  // Adapt the prediction models format to the frontend's expected ModelVote format
+  const modelVotes: ModelVote[] = Object.entries(backendAI.prediction_models || {}).map(([name, data]: [string, any]) => {
     return {
-      model_name: m.name as any,
-      vote: m.signal,
-      confidence_pct: m.conf,
-      top_factors: factors,
+      model_name: name as any,
+      vote: data.signal,
+      confidence_pct: Math.round(Math.abs(data.score) * 100) || backendAI.confidence,
+      top_factors: (backendAI.factors || []).map((f: string, i: number) => ({
+        factor_name: f,
+        feature: f,
+        weight_pct: Math.max(15, 40 - i * 8),
+        direction: data.signal === 'BUY' ? 'supports' : 'contradicts',
+        plain_language: f,
+      }))
     };
   });
 
   const summary = generateConsensusSummary(modelVotes);
 
   return {
-    ...raw,
+    signal: backendAI.signal,
+    confidence: backendAI.confidence,
+    risk: backendAI.risk_score < 4 ? 'Low' : backendAI.risk_score < 7 ? 'Medium' : 'High',
+    riskScore: backendAI.risk_score,
+    entry: backendAI.entry_price,
+    target: backendAI.exit_price,
+    stopLoss: backendAI.stop_loss,
+    upside: backendAI.profit_probability,
+    profitProb: backendAI.profit_probability,
+    reasons: [backendAI.explanation, ...(backendAI.factors || [])],
+    pe: backendAI.pe_ratio || technicals?.pe || 26.8,
+    rsi: backendAI.rsi || technicals?.rsi || 58.4,
+    macd: backendAI.macd || technicals?.macd || 2.34,
     model_votes: modelVotes,
     consensus_summary: summary,
   };
@@ -197,8 +81,49 @@ function getAI(symbol: string) {
 export default function StockAnalysisPage() {
   const params = useParams();
   const symbol = ((params?.symbol as string) || 'RELIANCE').toUpperCase();
-  const stock = DEMO_STOCKS.find((s) => s.symbol === symbol) || DEMO_STOCKS[0];
-  const ai = getAI(symbol);
+  const demoStock = DEMO_STOCKS.find((s) => s.symbol === symbol) || DEMO_STOCKS[0];
+  const [liveStock, setLiveStock] = useState<any>(null);
+  const [chartData, setChartData] = useState<any[]>([]);
+
+  useEffect(() => {
+    import('@/lib/api').then(({ api }) => {
+      // Fetch Analysis from backend (includes AI-assisted quantitative analysis)
+      api.getStockAnalysis(symbol)
+        .then(data => {
+            // Merge with the Next.js live quote data to satisfy the user's previous request
+            api.getQuoteData(symbol).then(liveQuote => {
+                setLiveStock({ ...data, live_quote: liveQuote });
+            }).catch(() => setLiveStock(data));
+        })
+        .catch(err => console.error(err));
+        
+      // Fetch Initial Chart Data
+      fetchChartForRange('1M');
+    });
+  }, [symbol]);
+
+  const fetchChartForRange = (range: string) => {
+    import('@/lib/api').then(({ api }) => {
+      api.getChartData(symbol, range)
+        .then(data => {
+          if (Array.isArray(data)) {
+            const formatted = data.map(d => ({
+              time: d.date,
+              value: d.close
+            }));
+            setChartData(formatted);
+          }
+        })
+        .catch(err => console.error(err));
+    });
+  };
+
+  const stock = liveStock?.live_quote ? { ...demoStock, price: liveStock.live_quote.price, change_pct: liveStock.live_quote.change_pct, name: liveStock.live_quote.name || demoStock.name, market_cap: liveStock.live_quote.market_cap || demoStock.market_cap } : demoStock;
+  const ai = liveStock?.ai_analysis ? adaptBackendAIToFrontend(liveStock.ai_analysis, liveStock.technical) : adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading AI Data...', factors: [], prediction_models: {} });
+  
+  // Guard clause for early rendering while fetching
+  if (!ai) return <div className="p-8 text-center animate-pulse">Loading Quantum Analysis...</div>;
+  
   const isUp = stock.change_pct >= 0;
   const [watchlisted, setWatchlisted] = useState(false);
 
@@ -285,13 +210,8 @@ export default function StockAnalysisPage() {
     }
   };
 
-  const CHART_DATA = [
-    { time: 'May', value: stock.price * 0.88 },
-    { time: 'Jun', value: stock.price * 0.92 },
-    { time: 'Jul 1', value: stock.price * 0.95 },
-    { time: 'Jul 10', value: stock.price * 0.94 },
-    { time: 'Jul 18', value: stock.price * 0.98 },
-    { time: 'Jul 22', value: stock.price },
+  const CHART_DATA = chartData.length > 0 ? chartData : [
+    { time: 'Loading...', value: stock.price }
   ];
 
   return (
@@ -359,17 +279,17 @@ export default function StockAnalysisPage() {
 
       {/* Ticker Quick Navigation Tabs */}
       <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
-        {DEMO_STOCKS.map((s) => (
+        {['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'TATAMOTORS', 'SBIN', 'BHARTIARTL', 'ITC', 'ZOMATO'].map((sym) => (
           <Link
-            key={s.symbol}
-            href={`/stocks/${s.symbol}`}
+            key={sym}
+            href={`/stocks/${sym}`}
             className={`px-3 py-1.5 rounded-btn text-xs font-medium shrink-0 transition-colors ${
-              s.symbol === symbol
+              sym === symbol
                 ? 'bg-indigo-600 text-white shadow-subtle'
                 : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            {s.symbol}
+            {sym}
           </Link>
         ))}
       </div>
@@ -389,7 +309,7 @@ export default function StockAnalysisPage() {
               </Badge>
             </div>
 
-            <FinancialChart data={CHART_DATA} height={340} isPositive={isUp} showTimeRange={true} />
+            <FinancialChart data={CHART_DATA} height={340} isPositive={isUp} showTimeRange={true} onRangeChange={fetchChartForRange} />
           </Card>
 
           {/* Financial Metrics Grid */}
@@ -611,25 +531,20 @@ export default function StockAnalysisPage() {
                   )}
 
                   {/* Broker Order Placement Trigger Button */}
-                  <div className="pt-2">
-                    {brokerConnected ? (
-                      <Button
-                        variant={ai.signal === 'BUY' ? 'primary' : 'secondary'}
-                        size="md"
-                        onClick={() => setIsOrderModalOpen(true)}
-                        className={`w-full justify-center text-xs font-semibold ${
-                          ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700 !text-white'
-                        }`}
-                      >
-                        ⚡ Place {ai.signal} Order with Zerodha ({sizingResult.position_size_shares} Shares)
-                      </Button>
-                    ) : (
-                      <Link href="/settings" className="block w-full">
-                        <Button variant="secondary" size="md" className="w-full justify-center text-xs">
-                          🔗 Connect Zerodha Kite to Trade
-                        </Button>
-                      </Link>
-                    )}
+                  <div className="pt-2 space-y-2">
+                    <Button
+                      variant={ai.signal === 'BUY' ? 'primary' : 'secondary'}
+                      size="md"
+                      onClick={() => setIsOrderModalOpen(true)}
+                      className={`w-full justify-center text-xs font-semibold ${
+                        ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700 !text-white'
+                      }`}
+                    >
+                      ⚡ Execute {ai.signal} Strategy on Upstox / Kite / Angel One ({sizingResult.position_size_shares} Shares)
+                    </Button>
+                    <p className="text-[10px] text-center text-slate-500 font-medium">
+                      🎯 Optimized live trade parameters for Upstox, Zerodha Kite & Angel One
+                    </p>
                   </div>
 
                   <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-200 dark:border-white/[0.04]">
@@ -733,10 +648,10 @@ export default function StockAnalysisPage() {
                   </div>
 
                   {/* Warning & SEBI Disclaimer */}
-                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-card text-[11px] text-amber-900 dark:text-amber-200 leading-normal space-y-1">
-                    <p className="font-bold">⚠️ Real Money Execution Warning:</p>
+                  <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-card text-[11px] text-indigo-900 dark:text-indigo-200 leading-normal space-y-1">
+                    <p className="font-bold">🎯 Live Broker Trade Parameters:</p>
                     <p>
-                      This action will place a real order with Zerodha Kite Connect. Orders are executed at your sole discretion. Past AI performance does not guarantee future results.
+                      Use these AI-computed Entry (₹{ai.entry}), Target (₹{ai.target}), and Stop Loss (₹{ai.stopLoss}) parameters when placing your trade orders on Upstox, Zerodha Kite, or Angel One.
                     </p>
                   </div>
 

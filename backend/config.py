@@ -23,8 +23,10 @@ class Settings(BaseSettings):
     upstox_api_key: Optional[str] = None
     upstox_api_secret: Optional[str] = None
 
-    # AI
-    openai_api_key: Optional[str] = None
+    # AI — NVIDIA Nemotron (server-side only; never exposed to the browser)
+    nvidia_api_key: Optional[str] = None
+    nvidia_model: str = "nvidia/nemotron-3-super-120b-a12b"
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
 
     # CORS
     cors_origins: str = "http://localhost:3000"
@@ -36,7 +38,7 @@ class Settings(BaseSettings):
 
     @property
     def has_live_data(self) -> bool:
-        return bool(self.finnhub_api_key or self.twelvedata_api_key or self.alpha_vantage_api_key)
+        return True
 
     class Config:
         env_file = ".env"

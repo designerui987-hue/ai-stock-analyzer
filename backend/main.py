@@ -8,11 +8,11 @@ from db.session import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 AI Stock Platform Backend Starting...")
-    print(f"📊 Live data: {'Enabled' if settings.has_live_data else 'Demo mode'}")
+    print("AI Stock Platform Backend Starting...")
+    print(f"Live data: {'Enabled' if settings.has_live_data else 'Demo mode'}")
     init_db()
     yield
-    print("👋 Shutting down...")
+    print("Shutting down...")
 
 
 app = FastAPI(

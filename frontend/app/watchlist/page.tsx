@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Plus, Search, ArrowUpRight, Bell, Sparkles, Filter } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
@@ -18,13 +18,27 @@ function getSignal(changePct: number) {
 
 export default function WatchlistPage() {
   const [filterQuery, setFilterQuery] = useState('');
-  const watchlistStocks = DEMO_STOCKS.slice(0, 10);
+  const [newSymbol, setNewSymbol] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [watchlistStocks, setWatchlistStocks] = useState<any[]>(DEMO_STOCKS.slice(0, 10));
+
+  useEffect(() => {
+    import('@/lib/api').then(({ api }) => {
+      api.getTopGainers()
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setWatchlistStocks(data);
+          }
+        })
+        .catch((err) => console.error(err));
+    });
+  }, []);
 
   const filtered = watchlistStocks.filter(
     (s) =>
       s.symbol.toLowerCase().includes(filterQuery.toLowerCase()) ||
-      s.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
-      s.sector.toLowerCase().includes(filterQuery.toLowerCase())
+      (s.name && s.name.toLowerCase().includes(filterQuery.toLowerCase())) ||
+      (s.sector && s.sector.toLowerCase().includes(filterQuery.toLowerCase()))
   );
 
   const buyCount = watchlistStocks.filter((s) => s.change_pct > 1.5).length;
@@ -37,7 +51,7 @@ export default function WatchlistPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
           <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-            Active Watchlist
+            Active Watchlist & Market Radar
           </h2>
           <Badge variant="indigo" size="md">
             {watchlistStocks.length} Tracked Assets
@@ -53,11 +67,29 @@ export default function WatchlistPage() {
               onChange={(e) => setFilterQuery(e.target.value)}
             />
           </div>
-          <Button variant="primary" size="md" icon={<Plus className="w-4 h-4" />}>
+          <Button variant="primary" size="md" icon={<Plus className="w-4 h-4" />} onClick={() => setShowAddModal(true)}>
             Add Symbol
           </Button>
         </div>
       </div>
+
+      {showAddModal && (
+        <div className="p-4 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-500/30 rounded-xl flex items-center space-x-3">
+          <Input
+            placeholder="Type any NSE/BSE stock ticker (e.g. TATAMOTORS, ZOMATO, IRCTC)..."
+            value={newSymbol}
+            onChange={(e) => setNewSymbol(e.target.value)}
+          />
+          <Link href={`/stocks/${newSymbol.trim().toUpperCase()}`}>
+            <Button variant="primary" size="md" disabled={!newSymbol.trim()}>
+              Track Stock
+            </Button>
+          </Link>
+          <Button variant="outline" size="md" onClick={() => setShowAddModal(false)}>
+            Cancel
+          </Button>
+        </div>
+      )}
 
       {/* Signal Distribution Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

@@ -103,7 +103,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Type a command or search stocks..."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && query.trim()) {
+                handleSelectStock(query.trim().toUpperCase());
+              }
+            }}
+            placeholder="Search any live stock symbol (e.g. RELIANCE, TCS, TATAMOTORS, ZOMATO)..."
             className="w-full py-4 text-sm bg-transparent text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none"
           />
           <kbd className="hidden sm:inline-block px-2 py-0.5 text-[11px] font-mono text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-white/5">
@@ -112,6 +117,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
         </div>
 
         <div className="max-h-96 overflow-y-auto p-2">
+          {query.trim().length >= 2 && (
+            <div className="mb-2">
+              <button
+                onClick={() => handleSelectStock(query.trim().toUpperCase())}
+                className="w-full flex items-center justify-between px-3 py-2.5 rounded-btn text-sm font-semibold bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors"
+              >
+                <div className="flex items-center space-x-2">
+                  <Search className="w-4 h-4 text-indigo-500" />
+                  <span>Analyze <strong>"{query.trim().toUpperCase()}"</strong> Live Stock</span>
+                </div>
+                <ArrowRight className="w-4 h-4 text-indigo-500" />
+              </button>
+            </div>
+          )}
           {filteredPages.length > 0 && (
             <div className="mb-3">
               <div className="px-3 py-1.5 text-[11px] font-medium text-slate-400 uppercase tracking-wider">

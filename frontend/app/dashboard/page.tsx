@@ -25,20 +25,48 @@ import {
 } from '@/lib/data';
 
 const CHART_DATA = [
-  { time: 'Jul 1', value: 2420000 },
-  { time: 'Jul 5', value: 2435000 },
-  { time: 'Jul 10', value: 2410000 },
-  { time: 'Jul 15', value: 2460000 },
-  { time: 'Jul 18', value: 2485000 },
-  { time: 'Jul 20', value: 2470000 },
-  { time: 'Jul 22', value: 2514200 },
+  { time: 'Jul 1',  value: 1183500 },
+  { time: 'Jul 5',  value: 1198200 },
+  { time: 'Jul 10', value: 1172300 },
+  { time: 'Jul 15', value: 1235600 },
+  { time: 'Jul 18', value: 1264800 },
+  { time: 'Jul 20', value: 1248900 },
+  { time: 'Jul 22', value: 1311875 },
 ];
 
 export default function DashboardPage() {
+  const [indices, setIndices] = React.useState<any[]>(DEMO_INDICES);
+  const [liveGainers, setLiveGainers] = React.useState<any[]>([]);
+  const [liveLosers, setLiveLosers] = React.useState<any[]>([]);
+
+  React.useEffect(() => {
+    import('@/lib/api').then(({ api }) => {
+      api.getMarketOverview()
+        .then(data => {
+          if (data && data.indices && Array.isArray(data.indices)) {
+            setIndices(data.indices);
+          }
+        })
+        .catch(err => console.error(err));
+
+      api.getTopGainers()
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) setLiveGainers(data);
+        })
+        .catch(err => console.error(err));
+
+      api.getTopLosers()
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) setLiveLosers(data);
+        })
+        .catch(err => console.error(err));
+    });
+  }, []);
+
   const pnlPositive = DEMO_PORTFOLIO.total_pnl >= 0;
   const sorted = [...DEMO_STOCKS].sort((a, b) => b.change_pct - a.change_pct);
-  const gainers = sorted.slice(0, 4);
-  const losers = sorted.slice(-4).reverse();
+  const gainers = liveGainers.length > 0 ? liveGainers : sorted.slice(0, 4);
+  const losers = liveLosers.length > 0 ? liveLosers : sorted.slice(-4).reverse();
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
@@ -191,7 +219,7 @@ export default function DashboardPage() {
 
       {/* Market Indices Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {DEMO_INDICES.map((idx) => {
+        {indices.map((idx) => {
           const up = idx.change_pct >= 0;
           return (
             <Card key={idx.symbol} interactive className="p-4">

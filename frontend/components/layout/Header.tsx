@@ -27,11 +27,10 @@ export default function Header() {
 
   const isStock = pathname.startsWith('/stocks/');
   const sym = isStock ? pathname.split('/')[2]?.toUpperCase() : null;
-  const stock = sym ? DEMO_STOCKS.find((s) => s.symbol === sym) : null;
   const meta =
     PAGE_TITLES[pathname] ||
-    (isStock && stock
-      ? { title: `${stock.name} (${stock.symbol})`, sub: `${stock.sector} · Equity Analysis` }
+    (isStock && sym
+      ? { title: `${sym} Live Analysis`, sub: `NSE Real-Time Market Intelligence` }
       : { title: 'StockAI Platform', sub: 'AI Market Intelligence' });
 
   const toggleTheme = () => {
