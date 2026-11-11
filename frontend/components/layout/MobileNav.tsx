@@ -18,6 +18,7 @@ import {
   Activity,
   BarChart2,
   ShoppingBag,
+  Database,
 } from 'lucide-react';
 
 const NAV = [
@@ -31,6 +32,7 @@ const NAV = [
   { href: '/performance', icon: Activity, label: 'Performance Ledger' },
   { href: '/backtest', icon: BarChart2, label: 'Backtest Engine' },
   { href: '/assistant', icon: MessageSquare, label: 'AI Assistant' },
+  { href: '/data-sources', icon: Database, label: 'Data Sources' },
   { href: '/settings', icon: Settings, label: 'Settings' },
 ];
 

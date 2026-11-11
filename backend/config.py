@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     # App
     app_name: str = "AI Stock Platform"
+    app_env: str = "development"  # "development" | "staging" | "production"
     debug: bool = True
     demo_mode: bool = False
 
@@ -16,10 +17,14 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ai_stock.db"
     redis_url: str = "redis://localhost:6379/0"
 
-    # Market Data APIs
+    # Market Data & Research APIs (Optional — server-side only)
     finnhub_api_key: Optional[str] = None
     twelvedata_api_key: Optional[str] = None
+    twelvedata_plan: str = "free"  # "free" | "grow" | "pro" | "ultra"
     alpha_vantage_api_key: Optional[str] = None
+    alpha_vantage_plan: str = "free"  # "free" | "premium"
+    gnews_api_key: Optional[str] = None
+    gnews_dev_mode: bool = False  # Strictly development-only; always disabled when app_env=production
 
     # Indian Broker APIs
     zerodha_api_key: Optional[str] = None

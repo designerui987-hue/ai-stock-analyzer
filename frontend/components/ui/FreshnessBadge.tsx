@@ -2,7 +2,17 @@
 
 import React from 'react';
 
-export type FreshnessStatus = 'LIVE' | 'DELAYED (15m)' | 'DELAYED' | 'STALE' | 'UNAVAILABLE';
+export type FreshnessStatus =
+  | 'LIVE'
+  | 'DELAYED (15m)'
+  | 'DELAYED'
+  | 'END_OF_DAY'
+  | 'END OF DAY'
+  | 'REFERENCE_RATE'
+  | 'REFERENCE RATE'
+  | 'NAV'
+  | 'STALE'
+  | 'UNAVAILABLE';
 
 interface FreshnessBadgeProps {
   status?: FreshnessStatus | string;
@@ -37,9 +47,29 @@ export function FreshnessBadge({
       case 'DELAYED (15M)':
       case 'DELAYED':
         return {
-          label: 'DELAYED (15m)',
+          label: normStatus === 'DELAYED' ? 'DELAYED' : 'DELAYED (15m)',
           wrapperClass: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
           dot: <span className="inline-flex rounded-full h-2 w-2 bg-amber-400 mr-1.5" />,
+        };
+      case 'END_OF_DAY':
+      case 'END OF DAY':
+        return {
+          label: 'END OF DAY',
+          wrapperClass: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+          dot: <span className="inline-flex rounded-full h-2 w-2 bg-sky-400 mr-1.5" />,
+        };
+      case 'REFERENCE_RATE':
+      case 'REFERENCE RATE':
+        return {
+          label: 'REFERENCE RATE',
+          wrapperClass: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30',
+          dot: <span className="inline-flex rounded-full h-2 w-2 bg-indigo-400 mr-1.5" />,
+        };
+      case 'NAV':
+        return {
+          label: 'NAV',
+          wrapperClass: 'bg-teal-500/10 text-teal-400 border-teal-500/30',
+          dot: <span className="inline-flex rounded-full h-2 w-2 bg-teal-400 mr-1.5" />,
         };
       case 'STALE':
         return {

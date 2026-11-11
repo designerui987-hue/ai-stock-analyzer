@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from api import stocks, portfolio, assistant, alerts, market, auth, fundamentals
+from api import stocks, portfolio, assistant, alerts, market, auth, fundamentals, data_sources
 from config import settings
 from db.session import init_db
 
@@ -34,6 +34,7 @@ app.add_middleware(
 app.include_router(market.router, prefix="/api/market", tags=["Market"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["Stocks"])
 app.include_router(fundamentals.router, prefix="/api/fundamentals", tags=["Fundamentals"])
+app.include_router(data_sources.router, prefix="/api/data-sources", tags=["Data Sources"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["Portfolio"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["AI Assistant"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["Alerts"])
