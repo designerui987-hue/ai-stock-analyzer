@@ -23,6 +23,31 @@ import {
 } from '@/lib/positionSizing';
 
 export default function PortfolioRiskDashboard() {
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+  if (!isDemoMode) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 py-8">
+        <div>
+          <h1 className="text-display font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+            <ShieldAlert className="text-indigo-600 dark:text-indigo-400" /> Portfolio Risk Dashboard
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Live broker holdings risk telemetry is unavailable (`DEMO_MODE=false`).
+          </p>
+        </div>
+        <Card className="p-6 space-y-3 border-amber-500/30">
+          <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-semibold text-sm">
+            <AlertTriangle className="w-4 h-4" />
+            <span>Account Holdings Unavailable</span>
+          </div>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Static sample holdings (`DEMO_PORTFOLIO`) are disabled unless `DEMO_MODE=true` is explicitly set. Connect your Zerodha Kite account in Settings or place simulated trades in the Paper Ledger.
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
   const p = DEMO_PORTFOLIO;
   const capital = 1183500; // Account Capital
 

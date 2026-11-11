@@ -261,9 +261,9 @@ async function runTests() {
     const ind = calculateIndicators(trendBars);
     assert.ok(ind, 'Indicators must be computable for 60 bars');
     assert.strictEqual(ind.barCount, 60);
-    assert.ok(ind.rsi > 50, 'RSI should reflect upward drift');
-    assert.ok(ind.atr > 0, 'ATR must be positive');
-    assert.ok(ind.sma20 > ind.sma50, 'SMA20 > SMA50 in upward trend');
+    assert.ok(ind.rsi !== null && ind.rsi > 50, 'RSI should reflect upward drift');
+    assert.ok(ind.atr !== null && ind.atr > 0, 'ATR must be positive');
+    assert.ok(ind.sma50 !== null && ind.sma20 > ind.sma50, 'SMA20 > SMA50 in upward trend');
 
     const signal = generateDeterministicSignal('INFY', trendBars);
     assert.ok(signal, 'Signal must be generated');

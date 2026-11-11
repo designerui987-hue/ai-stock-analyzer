@@ -48,7 +48,22 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "live_data": settings.has_live_data}
+    from services.kite_ws_collector import kite_ws_collector
+    from services.market_data_service import market_data_service
+    from services.nse_calendar import get_market_session
+
+    ws_health = kite_ws_collector.get_health_summary()
+    return {
+        "status": "healthy",
+        "live_data": bool(ws_health["active_connections"] > 0),
+        "feed": {
+            **ws_health,
+            "kite_ws_enabled": settings.kite_ws_enabled,
+            "kite_configured": settings.has_live_data,
+            "redis_connected": market_data_service.cache.is_redis_connected,
+            "market_session": get_market_session(),
+        },
+    }
 
 
 if __name__ == "__main__":

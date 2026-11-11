@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { verifyCronSecret, AuthError } from '@/lib/auth/session';
 import { generateDeterministicSignal, DailyBar } from '@/lib/deterministic-signals';
+import { getServerBackendUrl } from '@/lib/api';
 
 const DEFAULT_UNIVERSE = [
   'RELIANCE',
@@ -31,7 +32,7 @@ const DEFAULT_UNIVERSE = [
 
 async function fetchRealBars(symbol: string): Promise<DailyBar[] | null> {
   try {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const backendUrl = getServerBackendUrl();
     const res = await fetch(`${backendUrl}/api/stocks/${encodeURIComponent(symbol)}/chart?period=1Y`);
     if (!res.ok) return null;
     const data = await res.json();

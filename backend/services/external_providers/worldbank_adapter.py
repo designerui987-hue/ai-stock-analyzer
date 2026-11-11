@@ -3,8 +3,7 @@ World Bank Open Data Adapter — India Macroeconomic Indicators.
 
 Official API: https://api.worldbank.org/v2
 Authentication: None required.
-License: Creative Commons Attribution 4.0 (CC BY 4.0) for World Bank datasets;
-         third-party series may carry separate terms. Do not imply World Bank endorsement.
+License: Creative Commons Attribution 4.0 (CC BY 4.0) for World Bank datasets.
 Caching: Explicitly recommended by World Bank (annual/revised economic indicators).
 Freshness: Annual/quarterly statistics (labeled END_OF_DAY / Annual Macro).
 
@@ -13,6 +12,7 @@ Economic statistics are annual/quarterly and subject to historical revisions.
 NEVER interpret them as intraday trading signals.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -63,7 +63,7 @@ INDIA_INDICATORS: Dict[str, Dict[str, str]] = {
 
 
 class WorldBankAdapter(BaseAdapter):
-    """World Bank Indicators v2 adapter for India macro research."""
+    """Async World Bank Indicators v2 adapter for India macro research."""
 
     provider_id = PROVIDER_ID
     cache_ttl_seconds = 86400
@@ -71,9 +71,9 @@ class WorldBankAdapter(BaseAdapter):
 
     def __init__(self, cache=None):
         super().__init__(quota_per_day=None, quota_per_minute=None, cache=cache)
-        self.last_health = "healthy"
+        self.last_health = "unverified"
 
-    def get_indicator(
+    async def get_indicator(
         self,
         indicator_code: str,
         most_recent_values: int = 5,
@@ -92,10 +92,10 @@ class WorldBankAdapter(BaseAdapter):
         cache_key = f"ind:{code}:mrv:{mrv}"
         meta_def = INDIA_INDICATORS[code]
 
-        def _fetch() -> ProviderResponse:
+        async def _fetch() -> ProviderResponse:
             url = f"{BASE_URL}/country/IN/indicator/{code}"
             try:
-                raw = self._make_request(url, params={"format": "json", "mrv": mrv})
+                raw = await self._make_request(url, params={"format": "json", "mrv": mrv})
             except QuotaExhaustedError as exc:
                 return make_unavailable(PROVIDER_ID, str(exc), status="quota_exhausted", instrument=code)
             except Exception as exc:
@@ -105,36 +105,56 @@ class WorldBankAdapter(BaseAdapter):
             # World Bank returns [{"message": [...]}] on API error even with HTTP 200
             if isinstance(raw, list) and raw and isinstance(raw[0], dict) and "message" in raw[0]:
                 msg_list = raw[0].get("message") or []
-                msg_text = "; ".join(str(m.get("value", "")) for m in msg_list) or "World Bank API error"
+                if isinstance(msg_list, list):
+                    msg_text = "; ".join(
+                        str(m.get("value", "")) for m in msg_list if isinstance(m, dict)
+                    ) or "World Bank API error"
+                else:
+                    msg_text = str(msg_list)
                 return make_unavailable(PROVIDER_ID, msg_text, status="error", instrument=code)
 
             if not isinstance(raw, list) or len(raw) < 2:
-                return make_unavailable(PROVIDER_ID, "Unexpected World Bank response structure.", instrument=code)
+                return make_unavailable(
+                    PROVIDER_ID, "Unexpected World Bank response structure.", instrument=code
+                )
 
-            metadata = raw[0] or {}
-            observations = raw[1] or []
-            valid_obs: List[Dict[str, Any]] = [o for o in observations if o.get("value") is not None]
+            metadata = raw[0] if isinstance(raw[0], dict) else {}
+            observations = raw[1]
+            if not isinstance(observations, list):
+                return make_unavailable(
+                    PROVIDER_ID, "Malformed observations list from World Bank.", instrument=code
+                )
+
+            valid_obs: List[Dict[str, Any]] = [
+                o for o in observations if isinstance(o, dict) and o.get("value") is not None
+            ]
             valid_obs.sort(key=lambda o: str(o.get("date", "")), reverse=True)
 
-            if not valid_obs:
-                return make_unavailable(PROVIDER_ID, f"No reported observations for {code} (India).", instrument=code)
-
-            parsed = [
-                {
-                    "period": str(o.get("date")),
-                    "date": str(o.get("date")),
-                    "value": round(float(o["value"]), 4),
+            parsed: List[Dict[str, Any]] = []
+            for o in valid_obs:
+                obs_date = o.get("date")
+                if not obs_date:
+                    continue
+                try:
+                    val = round(float(o["value"]), 4)
+                except (TypeError, ValueError):
+                    continue
+                parsed.append({
+                    "period": str(obs_date),
+                    "date": str(obs_date),
+                    "value": val,
                     "indicator_code": code,
                     "indicator_name": meta_def["name"],
                     "unit": meta_def["unit"],
                     "country": "India",
-                }
-                for o in valid_obs
-                if o.get("date")
-            ]
+                })
 
-            most_recent_period = parsed[0]["period"] if parsed else None
+            if not parsed:
+                return make_unavailable(
+                    PROVIDER_ID, f"No reported observations for {code} (India).", instrument=code
+                )
 
+            most_recent_period = parsed[0]["period"]
             return ProviderResponse(
                 provider_id=PROVIDER_ID,
                 source=PROVIDER_ID,
@@ -162,20 +182,31 @@ class WorldBankAdapter(BaseAdapter):
                 source_url=f"https://data.worldbank.org/indicator/{code}?locations=IN",
             )
 
-        return self._cached_coalesced_fetch(cache_key, _fetch, skip_cache=skip_cache)
+        return await self._cached_coalesced_fetch(cache_key, _fetch, skip_cache=skip_cache)
 
-    def get_india_macro_summary(self, skip_cache: bool = False) -> ProviderResponse:
-        """Fetch the curated India macroeconomic research panel."""
+    async def get_india_macro_summary(self, skip_cache: bool = False) -> ProviderResponse:
+        """Fetch the curated India macroeconomic research panel concurrently."""
         cache_key = "summary:IN:v1"
 
-        def _fetch() -> ProviderResponse:
+        async def _fetch() -> ProviderResponse:
+            codes = list(INDIA_INDICATORS.keys())
+            responses = await asyncio.gather(
+                *(
+                    self.get_indicator(code, most_recent_values=3, skip_cache=skip_cache)
+                    for code in codes
+                ),
+                return_exceptions=True,
+            )
+
             summary: Dict[str, Any] = {}
             missing: List[str] = []
             latest_period: Optional[str] = None
             latest_updated: Optional[str] = None
 
-            for code in INDIA_INDICATORS:
-                resp = self.get_indicator(code, most_recent_values=3, skip_cache=skip_cache)
+            for code, resp in zip(codes, responses):
+                if isinstance(resp, Exception):
+                    missing.append(f"{code}: {resp}")
+                    continue
                 if resp.status == "ok" and resp.data:
                     summary[code] = resp.data
                     if resp.observation_time and (latest_period is None or resp.observation_time > latest_period):
@@ -212,13 +243,13 @@ class WorldBankAdapter(BaseAdapter):
                 source_url="https://data.worldbank.org/country/india",
             )
 
-        return self._cached_coalesced_fetch(cache_key, _fetch, skip_cache=skip_cache)
+        return await self._cached_coalesced_fetch(cache_key, _fetch, skip_cache=skip_cache)
 
-    def fetch(self, **kwargs) -> ProviderResponse:
+    async def fetch(self, **kwargs) -> ProviderResponse:
         code = kwargs.get("indicator_code")
         if code:
-            return self.get_indicator(code)
-        return self.get_india_macro_summary()
+            return await self.get_indicator(code)
+        return await self.get_india_macro_summary()
 
 
 worldbank = WorldBankAdapter()

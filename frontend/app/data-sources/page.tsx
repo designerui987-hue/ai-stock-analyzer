@@ -17,8 +17,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { fetchAPI } from '@/lib/api';
 
 interface ProviderStatus {
   provider_id: string;
@@ -65,7 +64,10 @@ interface ProviderEnvelope<T = any> {
 type ActiveTab = 'providers' | 'macro_fx' | 'mutual_funds';
 
 const STATUS_BADGE_MAP: Record<string, { label: string; variant: 'emerald' | 'amber' | 'red' | 'indigo' | 'slate' }> = {
-  CONNECTED: { label: 'Connected', variant: 'emerald' },
+  HEALTHY: { label: 'Healthy', variant: 'emerald' },
+  CONFIGURED: { label: 'Configured', variant: 'indigo' },
+  UNVERIFIED: { label: 'Unverified', variant: 'slate' },
+  DEGRADED: { label: 'Degraded', variant: 'amber' },
   KEY_REQUIRED: { label: 'Key Required', variant: 'amber' },
   QUOTA_EXHAUSTED: { label: 'Quota Exhausted', variant: 'red' },
   DEV_ONLY: { label: 'Dev Only', variant: 'indigo' },
@@ -112,9 +114,7 @@ export default function DataSourcesPage() {
     setStatusLoading(true);
     setStatusError(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/data-sources/status`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
+      const json = await fetchAPI('/api/data-sources/status');
       setProviders(json.providers || []);
     } catch (err: any) {
       setStatusError(err?.message || 'Unable to load provider status from backend');
@@ -128,16 +128,13 @@ export default function DataSourcesPage() {
     setMacroLoading(true);
     try {
       const [basketRes, histRes, macroRes] = await Promise.all([
-        fetch(`${BACKEND_URL}/api/data-sources/fx/basket`).then((r) => r.json()).catch(() => null),
-        fetch(`${BACKEND_URL}/api/data-sources/fx/history?from_currency=USD&to_currency=INR&days=30`)
-          .then((r) => r.json())
-          .catch(() => null),
-        fetch(`${BACKEND_URL}/api/data-sources/macro/india`).then((r) => r.json()).catch(() => null),
+        fetchAPI('/api/data-sources/fx/basket').catch(() => null),
+        fetchAPI('/api/data-sources/fx/history?from_currency=USD&to_currency=INR&days=30').catch(() => null),
+        fetchAPI('/api/data-sources/macro/india').catch(() => null),
       ]);
       setFxBasket(basketRes);
       setFxHistory(histRes);
       setMacroSummary(macroRes);
-      // Refresh provider status to reflect latest refresh timestamps
       loadProviderStatuses();
     } finally {
       setFxLoading(false);
@@ -150,10 +147,9 @@ export default function DataSourcesPage() {
     if (mfQuery.trim().length < 2) return;
     setMfSearching(true);
     try {
-      const res = await fetch(
-        `${BACKEND_URL}/api/data-sources/mf/search?q=${encodeURIComponent(mfQuery.trim())}`
+      const json: ProviderEnvelope = await fetchAPI(
+        `/api/data-sources/mf/search?q=${encodeURIComponent(mfQuery.trim())}`
       );
-      const json: ProviderEnvelope = await res.json();
       setMfSearchStatus(json);
       setMfResults(json.data?.results || []);
     } catch {
@@ -166,8 +162,7 @@ export default function DataSourcesPage() {
   const handleLoadMfNav = useCallback(async (schemeCode: number) => {
     setMfHistoryLoading(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/data-sources/mf/${schemeCode}?days=30`);
-      const json: ProviderEnvelope = await res.json();
+      const json: ProviderEnvelope = await fetchAPI(`/api/data-sources/mf/${schemeCode}?days=30`);
       setSelectedMfHistory(json);
       loadProviderStatuses();
     } finally {

@@ -4,21 +4,21 @@ GNews Indian News Search Adapter — STRICTLY DEVELOPMENT ONLY.
 Official docs: https://docs.gnews.io/ & https://gnews.io/terms
 Free tier limits: 100 requests/day (resets 00:00 UTC), max 10 articles/request,
                   12-hour article delay, 250-char truncated content, last 30 days only.
-Key env var: GNEWS_API_KEY (server-side only).
-Dev gate env var: GNEWS_DEV_MODE=true AND APP_ENV != "production".
+Configuration: Read strictly via central validated `Settings`.
+Dev gate: Explicit `APP_ENV=development` (or `dev`) AND `GNEWS_DEV_MODE=true`.
+Unknown or non-development environments MUST keep this disabled.
 
 CRITICAL COMPLIANCE & WORKFLOW BOUNDARY:
 - GNews free plan strictly PROHIBITS production deployment and commercial use.
-- This adapter stays DISABLED in production even if `GNEWS_API_KEY` is configured.
 - Headlines carry a 12-hour delay on the free tier and MUST NEVER trigger trading entries.
 """
 
 import logging
-import os
 from typing import Iterable, List, Optional
 
 import httpx
 
+from config import Settings, get_settings
 from services.external_providers.base import (
     BaseAdapter,
     ProviderResponse,
@@ -34,44 +34,44 @@ BASE_URL = "https://gnews.io/api/v4"
 
 
 class GNewsAdapter(BaseAdapter):
-    """Development-only news search adapter with 12h delayed headlines."""
+    """Async development-only news search adapter with 12h delayed headlines."""
 
     provider_id = PROVIDER_ID
     cache_ttl_seconds = 900
     caching_permitted = True
 
-    def __init__(self, cache=None):
+    def __init__(self, cache=None, app_settings: Optional[Settings] = None):
         super().__init__(quota_per_day=100, quota_per_minute=None, cache=cache)
-        self._api_key: Optional[str] = os.environ.get("GNEWS_API_KEY") or None
-        self._dev_mode: bool = os.environ.get("GNEWS_DEV_MODE", "false").strip().lower() == "true"
-        self._app_env: str = (os.environ.get("APP_ENV") or "development").strip().lower()
-        self.last_health = "disabled" if not self.is_enabled else "healthy"
+        self._settings: Settings = app_settings or get_settings(reload=True)
+        self._api_key: Optional[str] = (self._settings.gnews_api_key or "").strip() or None
+        self._dev_mode: bool = bool(self._settings.gnews_dev_mode)
+        self.last_health = "unverified" if self.is_enabled else "disabled"
 
     def _secrets_to_redact(self) -> Iterable[Optional[str]]:
         return (self._api_key,)
 
     @property
-    def is_production_env(self) -> bool:
-        return self._app_env == "production"
+    def is_explicit_dev_env(self) -> bool:
+        return self._settings.is_explicit_development
 
     @property
     def is_enabled(self) -> bool:
-        return (not self.is_production_env) and self._dev_mode and bool(self._api_key)
+        return self.is_explicit_dev_env and self._dev_mode and bool(self._api_key)
 
     def _check_dev_gate(self) -> Optional[ProviderResponse]:
-        if self.is_production_env or not self._dev_mode:
+        if not self.is_explicit_dev_env or not self._dev_mode:
             return make_unavailable(
                 PROVIDER_ID,
                 (
                     "GNews free plan terms prohibit production/commercial use. "
-                    "Disabled in production (requires APP_ENV!=production and GNEWS_DEV_MODE=true in dev)."
+                    "Requires explicit APP_ENV=development and GNEWS_DEV_MODE=true."
                 ),
             )
         if not self._api_key:
             return make_unavailable(PROVIDER_ID, "GNEWS_API_KEY not configured.")
         return None
 
-    def search_news(
+    async def search_news(
         self,
         query: str,
         max_results: int = 10,
@@ -91,7 +91,7 @@ class GNewsAdapter(BaseAdapter):
         lim = max(1, min(int(max_results), 10))
         cache_key = f"search:{clean_q.lower()}:{lim}"
 
-        def _fetch() -> ProviderResponse:
+        async def _fetch() -> ProviderResponse:
             params = {
                 "q": clean_q,
                 "lang": "en",
@@ -100,12 +100,12 @@ class GNewsAdapter(BaseAdapter):
                 "apikey": self._api_key,
             }
             try:
-                raw = self._make_request(f"{BASE_URL}/search", params=params, credit_weight=1)
+                raw = await self._make_request(f"{BASE_URL}/search", params=params, credit_weight=1)
             except QuotaExhaustedError as exc:
                 return make_unavailable(PROVIDER_ID, str(exc), status="quota_exhausted")
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code in (403, 429):
-                    self.mark_quota_exhausted()
+                if exc.response.status_code == 403:
+                    await self.mark_daily_exhausted()
                     return make_unavailable(
                         PROVIDER_ID,
                         "GNews daily quota (100 req/day) or plan restriction reached.",
@@ -117,21 +117,31 @@ class GNewsAdapter(BaseAdapter):
                 safe_err = redact_secrets(str(exc), self._secrets_to_redact())
                 return make_unavailable(PROVIDER_ID, f"Request failed: {safe_err}")
 
-            if isinstance(raw, dict) and raw.get("errors"):
+            if not isinstance(raw, dict):
+                return make_unavailable(PROVIDER_ID, "Malformed non-object response from GNews.")
+
+            if raw.get("errors"):
                 err_text = redact_secrets(str(raw["errors"]), self._secrets_to_redact())
                 return make_unavailable(PROVIDER_ID, f"GNews error: {err_text}", status="error")
 
-            articles = raw.get("articles") or []
+            articles = raw.get("articles")
+            if articles is None:
+                articles = []
+            if not isinstance(articles, list):
+                return make_unavailable(PROVIDER_ID, "Malformed articles list from GNews.")
+
             parsed: List[dict] = []
             seen_urls = set()
             for article in articles:
+                if not isinstance(article, dict):
+                    continue
                 url = article.get("url")
                 if url and url in seen_urls:
                     continue
                 if url:
                     seen_urls.add(url)
                 pub_at = article.get("publishedAt") or None
-                src = article.get("source") or {}
+                src = article.get("source") if isinstance(article.get("source"), dict) else {}
                 parsed.append({
                     "title": article.get("title"),
                     "description": article.get("description"),
@@ -164,11 +174,10 @@ class GNewsAdapter(BaseAdapter):
                 source_url="https://docs.gnews.io/endpoints/search-endpoint",
             )
 
-        return self._cached_coalesced_fetch(cache_key, _fetch, skip_cache=skip_cache)
+        return await self._cached_coalesced_fetch(cache_key, _fetch, skip_cache=skip_cache)
 
-    def fetch(self, **kwargs) -> ProviderResponse:
-        return self.search_news(kwargs.get("query", "NSE India"))
+    async def fetch(self, **kwargs) -> ProviderResponse:
+        return await self.search_news(kwargs.get("query", "NSE India"))
 
 
 gnews = GNewsAdapter()
-

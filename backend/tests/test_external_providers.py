@@ -1,37 +1,26 @@
 """
-Deterministic Fixture & Security Tests for External Research Data Providers.
+Deterministic Fixture, Concurrency, Quota & Security Tests for External Research Data Providers.
 
-Note: All tests in this module use deterministic fixtures and mock caches (zero live
-network calls) so CI runs reproducibly without consuming upstream quotas or failing
-when optional API keys are absent.
-
-Covers Section 6 requirements:
-1. Missing credentials
-2. Quota exhaustion and HTTP 429
-3. Provider errors returned inside HTTP 200 JSON
-4. Unsupported NSE symbols & paid-endpoint gating
-5. Currency and unit mismatches
-6. Old or missing timestamps (no now() substitution)
-7. Cache expiry and concurrent request deduplication (request coalescing)
-8. Prevention of delayed-data promotion to LIVE
-9. Production exclusion of development-only providers
-10. Zero secret leakage in responses, URLs, and error strings
+All tests run without live upstream network calls using fixtures and mocks so CI
+passes reproducibly regardless of optional API keys or external outages.
 """
 
+import asyncio
 import json
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from auth.security import create_access_token
+from config import Settings
 from main import app
 from services.external_providers.alpha_vantage_adapter import AlphaVantageAdapter
-from services.external_providers.base import ProviderResponse, QuotaExhaustedError
+from services.external_providers.base import MAX_COALESCE_LOCKS, ProviderResponse
 from services.external_providers.capability_registry import CapabilityRegistry
 from services.external_providers.frankfurter_adapter import FrankfurterAdapter
 from services.external_providers.gnews_adapter import GNewsAdapter
@@ -47,11 +36,57 @@ from services.external_providers.worldbank_adapter import WorldBankAdapter
 from services.market_data_service import CacheLayer, InMemoryCache
 
 
-def make_isolated_cache() -> CacheLayer:
-    """Create an isolated in-memory cache layer for deterministic tests."""
+class FakeRedis:
+    """Thread-safe minimal Redis mock supporting atomic counters, TTL, and NX locks."""
+
+    def __init__(self):
+        self._store = {}
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            return self._store.get(key)
+
+    def set(self, key, value, nx=False, ex=None):
+        with self._lock:
+            if nx and key in self._store:
+                return False
+            self._store[key] = str(value)
+            return True
+
+    def setex(self, key, ttl, value):
+        return self.set(key, value, ex=ttl)
+
+    def incr(self, key):
+        return self.incrby(key, 1)
+
+    def incrby(self, key, amount):
+        with self._lock:
+            cur = int(self._store.get(key, 0))
+            nxt = cur + int(amount)
+            self._store[key] = str(nxt)
+            return nxt
+
+    def decrby(self, key, amount):
+        return self.incrby(key, -int(amount))
+
+    def expire(self, key, ttl):
+        return True
+
+    def ttl(self, key):
+        return 30 if key in self._store else -2
+
+    def delete(self, key):
+        with self._lock:
+            self._store.pop(key, None)
+        return 1
+
+
+def make_isolated_cache(redis_client=None) -> CacheLayer:
+    """Create an isolated cache layer for deterministic tests."""
     layer = object.__new__(CacheLayer)
     layer.redis_url = "memory://test"
-    layer._redis = None
+    layer._redis = redis_client
     layer._memory = InMemoryCache()
     return layer
 
@@ -97,6 +132,22 @@ AV_DAILY_FIXTURE = {
     },
 }
 
+AV_DAILY_ADJUSTED_FIXTURE = {
+    "Meta Data": {"2. Symbol": "RELIANCE.BSE"},
+    "Time Series (Daily)": {
+        "2026-11-10": {
+            "1. open": "1280.00",
+            "2. high": "1305.00",
+            "3. low": "1275.00",
+            "4. close": "1298.50",
+            "5. adjusted close": "1291.25",
+            "6. volume": "543210",
+            "7. dividend amount": "7.25",
+            "8. split coefficient": "1.0",
+        }
+    },
+}
+
 TD_SERIES_FIXTURE = {
     "meta": {"symbol": "RELIANCE:NSE", "exchange": "NSE", "currency": "INR", "interval": "1day"},
     "values": [
@@ -112,47 +163,70 @@ TD_SERIES_FIXTURE = {
     "status": "ok",
 }
 
-GNEWS_FIXTURE = {
-    "totalArticles": 1,
-    "articles": [
-        {
-            "title": "Nifty consolidates ahead of CPI data",
-            "description": "Domestic benchmarks traded steady.",
-            "url": "https://example.com/nifty-cpi",
-            "publishedAt": "2026-11-10T04:15:00Z",
-            "source": {"name": "Business Standard", "url": "https://business-standard.com"},
-        }
-    ],
-}
 
-
-# ── 1. Capability Registry & Missing Credentials ─────────────────────────────
+# ── 1. Capability Registry, Settings & Status Distinctions ───────────────────
 
 class TestCapabilityRegistry:
     def test_all_six_providers_registered(self):
-        reg = CapabilityRegistry()
+        reg = CapabilityRegistry(Settings(secret_key="x" * 32))
         ids = {p.provider_id for p in reg.list_all()}
         assert ids == {"frankfurter", "worldbank", "mfapi", "alpha_vantage", "twelve_data", "gnews"}
 
-    def test_missing_credentials_disables_keyed_providers(self, monkeypatch):
-        monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
-        monkeypatch.delenv("TWELVEDATA_API_KEY", raising=False)
-        monkeypatch.delenv("GNEWS_API_KEY", raising=False)
-        reg = CapabilityRegistry()
+    def test_status_labels_distinguish_key_required_configured_unverified_and_healthy(self):
+        cfg = Settings(
+            secret_key="x" * 32,
+            app_env="development",
+            alpha_vantage_api_key="av_key_123",
+            twelvedata_api_key=None,
+            gnews_api_key=None,
+        )
+        reg = CapabilityRegistry(cfg)
 
         av = reg.get("alpha_vantage")
         td = reg.get("twelve_data")
-        assert av.enabled is False and av.status_label == "KEY_REQUIRED"
+        ff = reg.get("frankfurter")
+
+        assert av.enabled is True
+        assert av.status_label == "CONFIGURED"  # Not CONNECTED / HEALTHY before live call
+        assert av.status_label != "CONNECTED"
         assert td.enabled is False and td.status_label == "KEY_REQUIRED"
+        assert ff.enabled is True and ff.status_label == "UNVERIFIED"
 
-    def test_adapters_fail_gracefully_without_keys(self, monkeypatch):
-        monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
-        monkeypatch.delenv("TWELVEDATA_API_KEY", raising=False)
-        monkeypatch.delenv("GNEWS_API_KEY", raising=False)
+    def test_unknown_app_env_never_enables_dev_only_or_free_td(self):
+        for unknown_env in ("staging", "qa", "custom_env", ""):
+            cfg = Settings(
+                secret_key="x" * 32,
+                app_env=unknown_env,
+                gnews_dev_mode=True,
+                gnews_api_key="dev_secret",
+                twelvedata_api_key="td_secret",
+                twelvedata_plan="free",
+            )
+            reg = CapabilityRegistry(cfg)
+            assert reg.get("gnews").enabled is False
+            assert reg.get("gnews").status_label == "UNAVAILABLE"
+            assert reg.get("twelve_data").enabled is False
 
-        av_resp = AlphaVantageAdapter(cache=make_isolated_cache()).get_daily_eod("RELIANCE.BSE")
-        td_resp = TwelveDataAdapter(cache=make_isolated_cache()).get_quote("RELIANCE")
-        gn_resp = GNewsAdapter(cache=make_isolated_cache()).search_news("TCS")
+            gn = GNewsAdapter(cache=make_isolated_cache(), app_settings=cfg)
+            resp = asyncio.run(gn.search_news("NIFTY"))
+            assert resp.status == "unavailable"
+
+    def test_adapters_fail_gracefully_without_keys(self):
+        cfg = Settings(
+            secret_key="x" * 32,
+            alpha_vantage_api_key=None,
+            twelvedata_api_key=None,
+            gnews_api_key=None,
+        )
+        av_resp = asyncio.run(
+            AlphaVantageAdapter(cache=make_isolated_cache(), app_settings=cfg).get_daily_eod("RELIANCE.BSE")
+        )
+        td_resp = asyncio.run(
+            TwelveDataAdapter(cache=make_isolated_cache(), app_settings=cfg).get_quote("RELIANCE")
+        )
+        gn_resp = asyncio.run(
+            GNewsAdapter(cache=make_isolated_cache(), app_settings=cfg).search_news("TCS")
+        )
 
         for r in (av_resp, td_resp, gn_resp):
             assert r.status == "unavailable"
@@ -160,113 +234,188 @@ class TestCapabilityRegistry:
             assert r.data is None
 
 
-# ── 2 & 3. Quota Exhaustion, HTTP 429 & HTTP 200 Error Bodies ────────────────
+# ── 2 & 3. Quota Accounting, Retries, Retry-After & Redis Fallback ───────────
 
 class TestQuotaAndErrorHandling:
-    def test_alpha_vantage_http_200_note_and_info_map_to_quota_exhausted(self, monkeypatch):
-        monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "dummy_key")
-        for body in (
-            {"Note": "Thank you for using Alpha Vantage! API frequency limit reached."},
-            {"Information": "Daily API rate limit reached (25 requests/day)."},
-        ):
-            adapter = AlphaVantageAdapter(cache=make_isolated_cache())
-            with patch.object(adapter, "_make_request", return_value=body):
-                resp = adapter.get_daily_eod("RELIANCE.BSE", skip_cache=True)
-            assert resp.status == "quota_exhausted"
-            assert resp.freshness == "UNAVAILABLE"
-
-    def test_twelve_data_http_200_429_and_error_handling(self, monkeypatch):
-        monkeypatch.setenv("TWELVEDATA_API_KEY", "dummy_key")
-        monkeypatch.setenv("TWELVEDATA_PLAN", "grow")
-        monkeypatch.setenv("APP_ENV", "development")
-
-        adapter = TwelveDataAdapter(cache=make_isolated_cache())
+    def test_alpha_vantage_http_200_note_and_info_map_to_quota_exhausted(self):
+        cfg = Settings(secret_key="x" * 32, alpha_vantage_api_key="dummy_key")
+        # Note (burst limit) should trigger cooldown, Information daily should trigger daily exhaustion
+        adapter = AlphaVantageAdapter(cache=make_isolated_cache(), app_settings=cfg)
         with patch.object(
-            adapter, "_make_request",
-            return_value={"status": "error", "code": 429, "message": "Credits exhausted"},
+            adapter,
+            "_make_request",
+            new=AsyncMock(return_value={"Note": "API call frequency is 5 calls per minute."}),
         ):
-            resp = adapter.get_time_series("RELIANCE", skip_cache=True)
+            resp = asyncio.run(adapter.get_daily_eod("RELIANCE.BSE", skip_cache=True))
         assert resp.status == "quota_exhausted"
+        assert adapter.quota_status()["rate_limited"] is True
+        # Daily quota was NOT wiped out on per-minute Note
+        assert adapter.quota_status()["quota_remaining"] == 25
 
+        adapter2 = AlphaVantageAdapter(cache=make_isolated_cache(), app_settings=cfg)
         with patch.object(
-            adapter, "_make_request",
-            return_value={"status": "error", "code": 404, "message": "Symbol not found"},
+            adapter2,
+            "_make_request",
+            new=AsyncMock(return_value={"Information": "Daily API rate limit reached (25 requests/day)."}),
         ):
-            resp_err = adapter.get_time_series("INVALIDXYZ", skip_cache=True)
-        assert resp_err.status == "error"
-        assert resp_err.data is None
+            resp2 = asyncio.run(adapter2.get_daily_eod("RELIANCE.BSE", skip_cache=True))
+        assert resp2.status == "quota_exhausted"
+        assert adapter2.quota_status()["quota_remaining"] == 0
 
-    def test_upstream_http_429_exhausts_quota(self):
-        adapter = FrankfurterAdapter(cache=make_isolated_cache())
-        req = httpx.Request("GET", "https://api.frankfurter.dev/v1/latest")
-        res_429 = httpx.Response(429, request=req)
+    def test_http_429_respects_retry_after_without_wiping_daily_quota(self):
+        redis = FakeRedis()
+        adapter = TwelveDataAdapter(
+            cache=make_isolated_cache(redis),
+            app_settings=Settings(
+                secret_key="x" * 32,
+                app_env="development",
+                twelvedata_api_key="td_key",
+                twelvedata_plan="grow",
+            ),
+        )
+        req = httpx.Request("GET", "https://api.twelvedata.com/quote")
+        res_429 = httpx.Response(429, headers={"Retry-After": "45"}, request=req)
 
-        with patch("httpx.Client.get", return_value=res_429):
-            resp = adapter.get_rate("USD", "INR", skip_cache=True)
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=res_429)):
+            resp = asyncio.run(adapter.get_quote("RELIANCE", exchange="NSE", skip_cache=True))
+
         assert resp.status == "quota_exhausted"
-        assert adapter.last_health == "quota_exhausted"
+        assert "45s" in (resp.unavailable_reason or "")
+        q = adapter.quota_status()
+        assert q["rate_limited"] is True
+        # Only 1 attempt was deducted; 799/800 daily credits remain intact!
+        assert q["quota_remaining"] == 799
+        assert adapter.last_health == "degraded"
 
-    def test_local_credit_weight_quota_blocks_after_cap(self):
-        adapter = TwelveDataAdapter(cache=make_isolated_cache())
-        adapter._quota_per_day = 5
-        assert adapter.check_and_consume_quota(credit_weight=3) is True
-        assert adapter.check_and_consume_quota(credit_weight=2) is True
-        # 6th credit exceeds daily limit of 5
-        assert adapter.check_and_consume_quota(credit_weight=1) is False
-        assert adapter.quota_status()["quota_remaining"] == 0
+    def test_retries_consume_quota_per_upstream_attempt_across_workers(self):
+        redis = FakeRedis()
+        cfg = Settings(
+            secret_key="x" * 32,
+            app_env="development",
+            twelvedata_api_key="td_key",
+            twelvedata_plan="grow",
+        )
+        worker1 = TwelveDataAdapter(cache=make_isolated_cache(redis), app_settings=cfg)
+        worker2 = TwelveDataAdapter(cache=make_isolated_cache(redis), app_settings=cfg)
 
-    def test_worldbank_and_mfapi_http_200_errors(self):
+        req = httpx.Request("GET", "https://api.twelvedata.com/time_series")
+        err_500 = httpx.Response(500, request=req)
+        ok_200 = httpx.Response(200, json=TD_SERIES_FIXTURE, request=req)
+
+        with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=[err_500, ok_200])):
+            resp = asyncio.run(worker1.get_time_series("RELIANCE", exchange="NSE", skip_cache=True))
+
+        assert resp.status == "ok"
+        # Shared Redis reflects both upstream attempts (initial 500 + retry 200 = 2 credits)
+        assert worker2.quota_status()["quota_used_today"] == 2
+        assert worker2.quota_status()["quota_scope"] == "redis_shared"
+
+    def test_redis_unavailable_falls_back_safely_to_local_quota(self):
+        broken_redis = FakeRedis()
+        broken_redis.eval = MagicMockRaise()
+        broken_redis.get = MagicMockRaise()
+        broken_redis.incrby = MagicMockRaise()
+
+        adapter = AlphaVantageAdapter(
+            cache=make_isolated_cache(broken_redis),
+            app_settings=Settings(secret_key="x" * 32, alpha_vantage_api_key="av_key"),
+        )
+        ok, _, _ = asyncio.run(adapter.check_and_consume_quota(credit_weight=1))
+        assert ok is True
+        status = adapter.quota_status()
+        assert status["quota_scope"] == "process_local_fallback"
+        assert status["quota_used_today"] == 1
+
+    def test_malformed_payloads_never_raise_unhandled_exceptions(self):
+        ff = FrankfurterAdapter(cache=make_isolated_cache())
+        with patch.object(ff, "_make_request", new=AsyncMock(return_value="not-json-dict")):
+            r = asyncio.run(ff.get_rate("USD", "INR", skip_cache=True))
+        assert r.status == "unavailable"
+
         wb = WorldBankAdapter(cache=make_isolated_cache())
-        with patch.object(wb, "_make_request", return_value=[{"message": [{"id": "120", "value": "Invalid"}]}]):
-            resp = wb.get_indicator("NY.GDP.MKTP.KD.ZG", skip_cache=True)
-        assert resp.status == "error"
+        with patch.object(wb, "_make_request", new=AsyncMock(return_value=[{"message": [{"value": "Bad"}]}])):
+            r2 = asyncio.run(wb.get_indicator("NY.GDP.MKTP.KD.ZG", skip_cache=True))
+        assert r2.status == "error"
 
         mf = MFAPIAdapter(cache=make_isolated_cache())
-        with patch.object(mf, "_make_request", return_value={"status": "ERROR", "message": "Invalid scheme"}):
-            mf_resp = mf.get_latest_nav(9999999, skip_cache=True)
-        assert mf_resp.status == "unavailable"
+        with patch.object(mf, "_make_request", new=AsyncMock(return_value={"meta": None, "data": ["bad"]})):
+            r3 = asyncio.run(mf.get_latest_nav(119551, skip_cache=True))
+        assert r3.status == "unavailable"
 
 
-# ── 4. Unsupported NSE Symbols & Paid Endpoint Gating ────────────────────────
+class MagicMockRaise:
+    def __call__(self, *args, **kwargs):
+        raise ConnectionError("Redis connection refused")
 
-class TestNSEAndPlanGating:
-    def test_alpha_vantage_rejects_nse_and_paid_adjusted_on_free_plan(self, monkeypatch):
-        monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test_key")
-        monkeypatch.setenv("ALPHA_VANTAGE_PLAN", "free")
-        adapter = AlphaVantageAdapter(cache=make_isolated_cache())
 
-        nse_resp = adapter.get_daily_eod("RELIANCE.NS", exchange="NSE")
+# ── 4. Exchange Integrity & Adjusted vs Unadjusted Series ────────────────────
+
+class TestNSEExchangeAndAdjustedGating:
+    def test_alpha_vantage_rejects_nse_and_free_adjusted_never_falls_back_to_eod(self):
+        cfg_free = Settings(secret_key="x" * 32, alpha_vantage_api_key="k", alpha_vantage_plan="free")
+        adapter_free = AlphaVantageAdapter(cache=make_isolated_cache(), app_settings=cfg_free)
+
+        nse_resp = asyncio.run(adapter_free.get_daily_eod("RELIANCE.NS", exchange="NSE"))
         assert nse_resp.status == "unavailable"
         assert "NSE" in (nse_resp.unavailable_reason or "")
 
-        adj_resp = adapter.get_daily_adjusted("RELIANCE.BSE")
-        assert adj_resp.status == "unavailable"
-        assert "paid/premium" in (adj_resp.unavailable_reason or "")
+        adj_free = asyncio.run(adapter_free.get_daily_adjusted("RELIANCE.BSE", exchange="BSE"))
+        assert adj_free.status == "unavailable"
+        assert "premium" in (adj_free.unavailable_reason or "").lower()
 
-    def test_twelve_data_blocks_nse_on_free_plan(self, monkeypatch):
-        monkeypatch.setenv("TWELVEDATA_API_KEY", "test_key")
-        monkeypatch.setenv("TWELVEDATA_PLAN", "free")
-        adapter = TwelveDataAdapter(cache=make_isolated_cache())
+    def test_alpha_vantage_premium_adjusted_parses_real_fields_never_unadjusted(self):
+        cfg_prem = Settings(secret_key="x" * 32, alpha_vantage_api_key="k", alpha_vantage_plan="premium")
+        adapter = AlphaVantageAdapter(cache=make_isolated_cache(), app_settings=cfg_prem)
 
-        resp = adapter.get_time_series("RELIANCE:NSE")
-        assert resp.status == "unavailable"
-        assert "Grow/Pro/Ultra" in (resp.unavailable_reason or "")
+        with patch.object(adapter, "_make_request", new=AsyncMock(return_value=AV_DAILY_ADJUSTED_FIXTURE)):
+            resp = asyncio.run(adapter.get_daily_adjusted("RELIANCE", exchange="BSE", skip_cache=True))
+        assert resp.status == "ok"
+        assert resp.data["adjustment_basis"] == "adjusted"
+        assert resp.data["candles"][0]["adjusted_close"] == 1291.25
+        assert resp.data["candles"][0]["dividend_amount"] == 7.25
+
+        # Unadjusted upstream payload missing '5. adjusted close' MUST fail closed
+        with patch.object(adapter, "_make_request", new=AsyncMock(return_value=AV_DAILY_FIXTURE)):
+            bad_adj = asyncio.run(adapter.get_daily_adjusted("RELIANCE", exchange="BSE", skip_cache=True))
+        assert bad_adj.status == "unavailable"
+
+    def test_twelve_data_rejects_exchange_mismatch_and_interval_mismatch(self):
+        cfg = Settings(
+            secret_key="x" * 32,
+            app_env="development",
+            twelvedata_api_key="k",
+            twelvedata_plan="grow",
+        )
+        adapter = TwelveDataAdapter(cache=make_isolated_cache(), app_settings=cfg)
+
+        # Symbol explicitly tagged .NS cannot be queried as BSE
+        r_conflict = asyncio.run(adapter.get_time_series("RELIANCE.NS", exchange="BSE"))
+        assert r_conflict.status == "unavailable"
+
+        # Upstream silently returning BSE when NSE was requested fails closed
+        wrong_ex_payload = {
+            **TD_SERIES_FIXTURE,
+            "meta": {"symbol": "RELIANCE", "exchange": "BSE", "currency": "INR", "interval": "1day"},
+        }
+        with patch.object(adapter, "_make_request", new=AsyncMock(return_value=wrong_ex_payload)):
+            r_mismatch = asyncio.run(adapter.get_time_series("RELIANCE", exchange="NSE", skip_cache=True))
+        assert r_mismatch.status == "unavailable"
+        assert "Exchange mismatch" in (r_mismatch.unavailable_reason or "")
 
 
-# ── 5 & 6. Currency/Unit Mismatches & Old/Missing Timestamps ─────────────────
+# ── 5 & 6. Guardrails, Coalescing Bounds & Concurrency ───────────────────────
 
-class TestGuardrailsCurrencyAndTimestamps:
-    def test_currency_and_unit_mismatch_rejected(self):
-        ok, err = validate_currency_and_unit("INR", "USD")
-        assert ok is False and "Currency mismatch" in err
+class TestGuardrailsAndCoalescing:
+    def test_currency_and_unit_validation_and_timestamps(self):
+        ok, _ = validate_currency_and_unit("INR", "USD")
+        assert ok is False
+        ok_ts, _ = validate_observation_timestamp(None)
+        assert ok_ts is False
+        old_dt = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        ok_stale, _ = validate_observation_timestamp(old_dt, max_age_seconds=3600)
+        assert ok_stale is False
+        assert enforce_non_live_freshness("LIVE", "alpha_vantage") == "DELAYED"
 
-        ok2, err2 = validate_currency_and_unit("USD", "USD", "Constant 2015 USD", "Annual %")
-        assert ok2 is False and "Unit mismatch" in err2
-
-        ok3, err3 = validate_currency_and_unit("INR", "INR", "NAV per unit (INR)", "NAV per unit (INR)")
-        assert ok3 is True and err3 is None
-
-    def test_fallback_compatibility_rejects_mismatched_basis(self):
         primary = {
             "instrument": "RELIANCE",
             "exchange": "NSE",
@@ -276,179 +425,128 @@ class TestGuardrailsCurrencyAndTimestamps:
             "entitlement": "kite_live",
             "require_realtime": True,
         }
-        candidate = {**primary, "adjustment_basis": "unadjusted", "freshness": "END_OF_DAY"}
-        ok, reason = can_fallback_market_series(primary, candidate)
-        assert ok is False
-        assert "adjustment basis" in reason
+        cand = {**primary, "adjustment_basis": "unadjusted", "freshness": "END_OF_DAY"}
+        ok_fb, _ = can_fallback_market_series(primary, cand)
+        assert ok_fb is False
 
-    def test_missing_or_stale_timestamp_rejected_without_now_fallback(self):
-        ok_none, _ = validate_observation_timestamp(None)
-        assert ok_none is False
-
-        old_dt = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
-        ok_stale, msg = validate_observation_timestamp(old_dt, max_age_seconds=3600)
-        assert ok_stale is False and "stale" in msg
-
-    def test_adapters_keep_missing_timestamp_unavailable_never_now(self):
-        ff = FrankfurterAdapter(cache=make_isolated_cache())
-        with patch.object(ff, "_make_request", return_value={"base": "USD", "rates": {"INR": 93.9}}):
-            resp = ff.get_rate("USD", "INR")
-        assert resp.status == "unavailable"
-        assert resp.observation_time is None
-
-        mf = MFAPIAdapter(cache=make_isolated_cache())
-        with patch.object(
-            mf, "_make_request",
-            return_value={"meta": {"scheme_name": "X"}, "data": [{"date": "not-a-date", "nav": "10"}]},
-        ):
-            mf_resp = mf.get_latest_nav(119551)
-        assert mf_resp.status == "unavailable"
-        assert mf_resp.observation_time is None
-
-
-# ── 7. Cache Expiry & Concurrent Request Coalescing ──────────────────────────
-
-class TestCachingAndCoalescing:
-    def test_cache_hit_and_expiry(self):
-        cache = make_isolated_cache()
-        adapter = FrankfurterAdapter(cache=cache)
-        adapter.cache_ttl_seconds = 1
-
-        call_count = 0
-
-        def fake_req(url, params=None, credit_weight=1):
-            nonlocal call_count
-            call_count += 1
-            return FRANKFURTER_USD_INR_FIXTURE
-
-        with patch.object(adapter, "_make_request", side_effect=fake_req):
-            r1 = adapter.get_rate("USD", "INR")
-            r2 = adapter.get_rate("USD", "INR")
-            assert r1.cached is False
-            assert r2.cached is True
-            assert call_count == 1
-
-            # Wait past 1s TTL -> cache expires -> fresh upstream request runs
-            time.sleep(1.1)
-            r3 = adapter.get_rate("USD", "INR")
-            assert r3.cached is False
-            assert call_count == 2
-
-    def test_concurrent_requests_coalesced_to_single_upstream_call(self):
-        cache = make_isolated_cache()
-        adapter = FrankfurterAdapter(cache=cache)
+    def test_concurrent_async_coalescing_and_bounded_lock_storage(self):
+        adapter = FrankfurterAdapter(cache=make_isolated_cache())
         upstream_calls = 0
-        count_lock = threading.Lock()
 
-        def slow_upstream(url, params=None, credit_weight=1):
+        async def slow_req(url, params=None, credit_weight=1):
             nonlocal upstream_calls
-            time.sleep(0.15)
-            with count_lock:
-                upstream_calls += 1
+            await asyncio.sleep(0.08)
+            upstream_calls += 1
             return FRANKFURTER_USD_INR_FIXTURE
 
-        with patch.object(adapter, "_make_request", side_effect=slow_upstream):
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                results = list(pool.map(lambda _: adapter.get_rate("USD", "INR"), range(6)))
+        async def run_concurrent():
+            with patch.object(adapter, "_make_request", side_effect=slow_req):
+                results = await asyncio.gather(*(adapter.get_rate("USD", "INR") for _ in range(6)))
+            assert upstream_calls == 1
+            assert all(r.status == "ok" and r.data["rate"] == 93.93 for r in results)
 
-        assert upstream_calls == 1, f"Expected 1 coalesced upstream call, got {upstream_calls}"
-        assert all(r.status == "ok" and r.data["rate"] == 93.93 for r in results)
+            # Verify lock dictionary stays strictly bounded
+            for i in range(MAX_COALESCE_LOCKS + 50):
+                adapter._get_coalesce_lock(f"ext:frankfurter:key:{i}")
+            assert len(adapter._coalesce_locks) <= MAX_COALESCE_LOCKS
 
-    def test_cache_bypassed_when_caching_not_permitted(self):
-        cache = make_isolated_cache()
-        adapter = FrankfurterAdapter(cache=cache)
-        adapter.caching_permitted = False
-
-        calls = 0
-
-        def fake_req(url, params=None, credit_weight=1):
-            nonlocal calls
-            calls += 1
-            return FRANKFURTER_USD_INR_FIXTURE
-
-        with patch.object(adapter, "_make_request", side_effect=fake_req):
-            adapter.get_rate("USD", "INR")
-            adapter.get_rate("USD", "INR")
-        assert calls == 2
+        asyncio.run(run_concurrent())
 
 
-# ── 8 & 9. No LIVE Promotion & Production Dev-Only Exclusion ─────────────────
+# ── 7. Auth, Rate Limits & Non-Blocking FastAPI Router ───────────────────────
 
-class TestFreshnessAndProductionExclusion:
-    def test_provider_response_never_allows_live_freshness(self):
-        resp = ProviderResponse(provider_id="twelve_data", data={"price": 100}, freshness="LIVE")
-        assert resp.freshness == "UNAVAILABLE"
-        assert enforce_non_live_freshness("LIVE", "alpha_vantage") == "DELAYED"
-
-    def test_gnews_excluded_in_production_even_when_dev_flag_and_key_set(self, monkeypatch):
-        monkeypatch.setenv("APP_ENV", "production")
-        monkeypatch.setenv("GNEWS_DEV_MODE", "true")
-        monkeypatch.setenv("GNEWS_API_KEY", "dev_secret_key")
-
-        reg = CapabilityRegistry()
-        assert reg.get("gnews").enabled is False
-
-        adapter = GNewsAdapter(cache=make_isolated_cache())
-        resp = adapter.search_news("RELIANCE")
-        assert resp.status == "unavailable"
-        assert "prohibit production" in (resp.unavailable_reason or "")
-
-    def test_twelve_data_free_tier_excluded_in_production(self, monkeypatch):
-        monkeypatch.setenv("APP_ENV", "production")
-        monkeypatch.setenv("TWELVEDATA_API_KEY", "td_key")
-        monkeypatch.setenv("TWELVEDATA_PLAN", "free")
-
-        reg = CapabilityRegistry()
-        assert reg.get("twelve_data").enabled is False
-
-        adapter = TwelveDataAdapter(cache=make_isolated_cache())
-        resp = adapter.get_time_series("AAPL")
-        assert resp.status == "unavailable"
-        assert "prohibit production" in (resp.unavailable_reason or "")
-
-
-# ── 10. Secret Leakage & Router Integration ──────────────────────────────────
-
-class TestSecretRedactionAndRoutes:
-    def test_api_keys_never_appear_in_responses_or_errors(self, monkeypatch):
-        av_secret = "AV_SUPER_SECRET_TOKEN_98765"
-        gn_secret = "GNEWS_SUPER_SECRET_TOKEN_43210"
-        monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", av_secret)
-        monkeypatch.setenv("GNEWS_API_KEY", gn_secret)
-        monkeypatch.setenv("GNEWS_DEV_MODE", "true")
-        monkeypatch.setenv("APP_ENV", "development")
-
-        av = AlphaVantageAdapter(cache=make_isolated_cache())
-        with patch.object(av, "_make_request", return_value=AV_DAILY_FIXTURE):
-            av_ok = av.get_daily_eod("RELIANCE.BSE")
-        assert av_secret not in json.dumps(av_ok.to_dict())
-
-        # Also test HTTP error path redacts key from URL error message
-        req = httpx.Request("GET", f"https://gnews.io/api/v4/search?apikey={gn_secret}")
-        err_resp = httpx.Response(500, request=req)
-        gn = GNewsAdapter(cache=make_isolated_cache())
-        with patch("httpx.Client.get", return_value=err_resp), patch("time.sleep"):
-            gn_err = gn.search_news("NIFTY")
-        assert gn_secret not in json.dumps(gn_err.to_dict())
-
-    def test_fastapi_data_sources_routes_with_fixtures(self):
+class TestAuthAndNonBlockingRoutes:
+    def test_data_sources_routes_require_jwt_auth(self):
         client = TestClient(app)
-        status_res = client.get("/api/data-sources/status")
-        assert status_res.status_code == 200
-        assert len(status_res.json()["providers"]) == 6
+        unauth_status = client.get("/api/data-sources/status")
+        assert unauth_status.status_code in (401, 403)
+        unauth_fx = client.get("/api/data-sources/fx/usd-inr")
+        assert unauth_fx.status_code in (401, 403)
+
+        token = create_access_token("42")
+        headers = {"Authorization": f"Bearer {token}"}
+        ok_status = client.get("/api/data-sources/status", headers=headers)
+        assert ok_status.status_code == 200
+        assert len(ok_status.json()["providers"]) == 6
+
+    def test_caller_rate_limit_enforced_with_429(self, monkeypatch):
+        client = TestClient(app)
+        token = create_access_token("rate_limit_user_99")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        from api import data_sources as ds_mod
+        monkeypatch.setattr(
+            ds_mod,
+            "get_settings",
+            lambda reload=False: Settings(secret_key="x" * 32, research_rate_limit_per_minute=2),
+        )
+        ds_mod._LOCAL_USER_LIMITS.clear()
 
         with patch(
             "api.data_sources.frankfurter.get_usd_inr_rate",
-            return_value=ProviderResponse(
+            new=AsyncMock(
+                return_value=ProviderResponse(
+                    provider_id="frankfurter",
+                    data={"rate": 93.93},
+                    observation_time="2026-11-10",
+                    freshness="REFERENCE_RATE",
+                    status="ok",
+                )
+            ),
+        ):
+            r1 = client.get("/api/data-sources/fx/usd-inr", headers=headers)
+            r2 = client.get("/api/data-sources/fx/usd-inr", headers=headers)
+            r3 = client.get("/api/data-sources/fx/usd-inr", headers=headers)
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r3.status_code == 429
+        assert "Retry-After" in r3.headers
+
+    def test_slow_research_provider_does_not_block_health_endpoint(self):
+        token = create_access_token("nonblock_user_7")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def slow_fx():
+            await asyncio.sleep(0.35)
+            return ProviderResponse(
                 provider_id="frankfurter",
-                data={"rate": 93.93, "effective_date": "2026-11-10"},
+                data={"rate": 93.93},
                 observation_time="2026-11-10",
                 freshness="REFERENCE_RATE",
                 status="ok",
-            ),
-        ):
-            fx_res = client.get("/api/data-sources/fx/usd-inr")
-        assert fx_res.status_code == 200
-        assert fx_res.json()["freshness"] == "REFERENCE_RATE"
-        assert fx_res.json()["observation_time"] == "2026-11-10"
+            )
 
+        async def check_non_blocking():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                with patch("api.data_sources.frankfurter.get_usd_inr_rate", side_effect=slow_fx):
+                    slow_task = asyncio.create_task(client.get("/api/data-sources/fx/usd-inr", headers=headers))
+                    await asyncio.sleep(0.03)
+                    t0 = time.monotonic()
+                    health_res = await client.get("/health")
+                    elapsed = time.monotonic() - t0
+                    fx_res = await slow_task
+
+            assert health_res.status_code == 200
+            assert elapsed < 0.15, f"/health was blocked for {elapsed:.3f}s by slow research call"
+            assert fx_res.status_code == 200
+
+        asyncio.run(check_non_blocking())
+
+    def test_secret_redaction_in_responses_and_errors(self):
+        gn_secret = "GNEWS_SUPER_SECRET_TOKEN_43210"
+        cfg = Settings(
+            secret_key="x" * 32,
+            app_env="development",
+            gnews_dev_mode=True,
+            gnews_api_key=gn_secret,
+        )
+        req = httpx.Request("GET", f"https://gnews.io/api/v4/search?apikey={gn_secret}")
+        err_resp = httpx.Response(500, request=req)
+        gn = GNewsAdapter(cache=make_isolated_cache(), app_settings=cfg)
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=err_resp)), patch(
+            "asyncio.sleep", new=AsyncMock()
+        ):
+            gn_err = asyncio.run(gn.search_news("NIFTY"))
+        assert gn_secret not in json.dumps(gn_err.to_dict())

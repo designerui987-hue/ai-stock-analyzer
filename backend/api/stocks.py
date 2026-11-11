@@ -1,118 +1,170 @@
-"""Stock analysis and market data API endpoints."""
+"""
+Stocks & Market Stream API Router.
+
+Security & Reliability:
+- Broker access tokens are NEVER accepted via query params (`kite_token` removed).
+- Authenticated users resolve server-side encrypted Kite credentials from DB (`user_id` via JWT).
+- `/stream` connects to live Kite WebSocket ticks when enabled & entitled, with delayed fallback
+  and clean unsubscribe on disconnect/navigation.
+- Demo fixtures are strictly gated behind explicit `settings.demo_mode == True`.
+"""
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
-import os
-from datetime import datetime, timezone
-from typing import Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
-from data.demo_stocks import NIFTY50_STOCKS, DEMO_NEWS
-from ai_models.prediction_engine import prediction_engine
-from ai_models.sentiment_analyzer import sentiment_analyzer, risk_analyzer
-from services.market_data_service import market_data_service
+from ai_models.prediction_engine import PredictionEngine
+from auth.security import get_optional_user, get_stream_user
+from config import settings
+from data.demo_stocks import NIFTY50_STOCKS
+from db.session import get_db
 from services.backtest_service import BacktestEngine
-from auth.security import get_stream_user
+from services.broker_service import mark_user_kite_token_expired, resolve_user_kite_credentials
+from services.kite_ws_collector import kite_ws_collector
+from services.market_data_service import MarketHours, market_data_service
 
-router = APIRouter()
 logger = logging.getLogger("api.stocks")
 
+router = APIRouter()
+prediction_engine = PredictionEngine()
 
-# ── Search & List ─────────────────────────────────────────────────────────────
 
 @router.get("/search")
 async def search_stocks(q: str = ""):
-    """Search stocks by symbol or name."""
-    if not q:
-        return [
-            {
-                "symbol": sym,
-                "name": data["name"],
-                "sector": data["sector"],
-                "price": data["price"],
-                "change_pct": data["change_pct"],
-            }
-            for sym, data in NIFTY50_STOCKS.items()
-        ]
-
-    q_upper = q.upper()
+    """Search NSE stock universe metadata (catalog only, no fabricated prices)."""
+    q_upper = q.strip().upper()
     results = []
     for symbol, data in NIFTY50_STOCKS.items():
-        if q_upper in symbol or q.lower() in data["name"].lower():
+        if not q_upper or q_upper in symbol or q_upper in data.get("name", "").upper():
             results.append({
                 "symbol": symbol,
-                "name": data["name"],
-                "sector": data["sector"],
-                "price": data["price"],
-                "change_pct": data["change_pct"],
+                "name": data.get("name", symbol),
+                "sector": data.get("sector"),
+                "exchange": "NSE",
             })
-
-    if not results and len(q_upper) >= 2:
-        results.append({
-            "symbol": q_upper,
-            "name": f"{q_upper} (Live Equity)",
-            "sector": "NSE Equity",
-            "price": 0,
-            "change_pct": 0,
-        })
     return results
 
 
 @router.get("/list")
 async def list_stocks():
-    """Get all available stocks."""
-    return [
-        {
-            "symbol": sym,
-            "name": data["name"],
-            "sector": data["sector"],
-            "price": data["price"],
-            "change": data["change"],
-            "change_pct": data["change_pct"],
-            "market_cap": data["market_cap"],
-            "volume": data["volume"],
-        }
-        for sym, data in NIFTY50_STOCKS.items()
-    ]
+    """List supported NIFTY 50 symbols with catalog metadata only (no demo prices in prod paths)."""
+    items = []
+    for symbol, data in NIFTY50_STOCKS.items():
+        if settings.demo_mode:
+            items.append({
+                **data,
+                "symbol": symbol,
+                "exchange": "NSE",
+                "source": "demo_fixture",
+                "freshness": "DEMO",
+                "demo": True,
+            })
+        else:
+            items.append({
+                "symbol": symbol,
+                "name": data.get("name", symbol),
+                "sector": data.get("sector"),
+                "exchange": "NSE",
+            })
+    return items
 
-
-# ── Real-Time Price Streaming (SSE) ──────────────────────────────────────────
 
 @router.get("/stream")
 async def stream_prices(
     request: Request,
-    symbols: str = Query("RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK,BHARTIARTL", description="Comma-separated symbols"),
-    current_user: str = Depends(get_stream_user),
+    symbols: str = Query("RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK"),
+    exchange: str = Query("NSE"),
+    user_id: str = Depends(get_stream_user),
+    db: Session = Depends(get_db),
 ):
     """
-    Server-Sent Events (SSE) streaming endpoint for watchlist prices.
-    Pushes real-time / delayed quotes with freshness badges every 3 seconds.
+    Server-Sent Events (SSE) endpoint streaming per-user authorized quotes.
+    Uses live Kite WebSocket ticks when `kite_ws_enabled` and user has active Kite credentials;
+    falls back cleanly to server-side delayed quotes without query-string token leakage.
     """
-    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    ex_upper = exchange.strip().upper()
+    if ex_upper not in ("NSE", "BSE"):
+        raise HTTPException(status_code=400, detail=f"Unsupported exchange '{exchange}'.")
+
+    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:20]
+    creds = resolve_user_kite_credentials(user_id, db)
+
+    if creds and settings.kite_ws_enabled:
+        try:
+            await kite_ws_collector.instruments.refresh_from_kite_csv()
+        except Exception as exc:
+            logger.debug("Kite instrument CSV preload skipped: %s", exc)
+        tokens = [
+            tok
+            for sym in symbol_list
+            if (tok := kite_ws_collector.instruments.get_token(sym, exchange=ex_upper)) is not None
+        ]
+        if tokens:
+            await kite_ws_collector.start_user_collector(
+                user_id=user_id,
+                api_key=creds.api_key,
+                access_token=creds.access_token,
+                tokens=tokens,
+                on_token_expired=lambda uid: mark_user_kite_token_expired(uid, db),
+            )
 
     async def event_generator():
+        ws_queue = kite_ws_collector.subscribe_stream(user_id)
         try:
+            # 1. Emit immediate initial snapshot
+            initial_quotes = await asyncio.to_thread(
+                market_data_service.get_watchlist_quotes,
+                symbol_list,
+                None,
+                user_id,
+                ex_upper,
+                db,
+            )
+            yield f"data: {json.dumps(initial_quotes)}\n\n"
+
             while True:
                 if await request.is_disconnected():
-                    logger.debug("[SSE] Client disconnected from price stream")
                     break
 
-                quotes = market_data_service.get_watchlist_quotes(symbol_list)
-                payload = {
-                    "type": "watchlist_update",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "quotes": quotes,
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-
-                # Stream interval: 3 seconds
-                await asyncio.sleep(3)
-
+                try:
+                    tick = await asyncio.wait_for(ws_queue.get(), timeout=5.0)
+                    tick_sym = str(tick.get("symbol", "")).upper()
+                    if tick_sym in symbol_list:
+                        payload = {
+                            tick_sym: {
+                                **tick,
+                                "freshness": MarketHours.calculate_freshness(
+                                    as_of=tick.get("as_of"),
+                                    is_realtime=True,
+                                ),
+                                "market_session": MarketHours.get_market_session(),
+                                "connection_status": kite_ws_collector.get_connection_state(user_id),
+                                "status": "ok",
+                            }
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                except asyncio.TimeoutError:
+                    quotes = await asyncio.to_thread(
+                        market_data_service.get_watchlist_quotes,
+                        symbol_list,
+                        None,
+                        user_id,
+                        ex_upper,
+                        db,
+                    )
+                    yield f"data: {json.dumps(quotes)}\n\n"
         except asyncio.CancelledError:
-            logger.debug("[SSE] Price stream cancelled for user %s", current_user)
+            raise
+        except Exception as exc:
+            logger.error("[stream] SSE stream terminated for user=%s: %s", user_id, exc)
+        finally:
+            kite_ws_collector.unsubscribe_stream(user_id, ws_queue)
 
     return StreamingResponse(
         event_generator(),
@@ -125,8 +177,6 @@ async def stream_prices(
     )
 
 
-# ── Backtesting Engine ────────────────────────────────────────────────────────
-
 @router.get("/backtest")
 def run_backtest(
     symbol: str = Query("RELIANCE", description="NSE symbol to backtest"),
@@ -134,9 +184,7 @@ def run_backtest(
     initial_capital: float = Query(100000.0, ge=10000.0, description="Starting capital in INR"),
 ):
     """
-    Backtest production deterministic quantitative rules (v1.0-deterministic-quant)
-    on historical daily NSE data vs NIFTY 50 buy & hold.
-    Includes Indian brokerage (₹20 cap), STT (0.1%), slippage (0.05%), and walk-forward splits.
+    Backtest deterministic quantitative rules (v1.0-deterministic-quant) on historical daily NSE data.
     """
     engine = BacktestEngine(symbol=symbol, years=years, initial_capital=initial_capital)
     result = engine.run()
@@ -145,161 +193,231 @@ def run_backtest(
     return result
 
 
-# ── Single Stock Quote ────────────────────────────────────────────────────────
-
 @router.get("/quote/{symbol}")
-def get_stock_quote(symbol: str, kite_token: Optional[str] = None):
-    """Get single stock quote with data freshness badge."""
-    quote = market_data_service.get_quote(symbol, kite_token=kite_token)
-    if quote.get("status") == "unavailable":
-        raise HTTPException(status_code=503, detail=quote)
-    return quote
+async def get_stock_quote(
+    symbol: str,
+    exchange: str = Query("NSE"),
+    user_id: Optional[str] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """Fetch quote resolving verified user's server-side Kite connection when logged in."""
+    return await asyncio.to_thread(
+        market_data_service.get_quote,
+        symbol,
+        False,
+        None,
+        user_id,
+        exchange,
+        db,
+    )
 
-
-# ── Single Stock Analysis ─────────────────────────────────────────────────────
 
 @router.get("/{symbol}")
-def get_stock_analysis(symbol: str, kite_token: Optional[str] = None):
-    """Get full AI analysis for any stock symbol with unified market data."""
-    symbol = symbol.upper()
-    demo_stock = NIFTY50_STOCKS.get(symbol)
+async def get_stock_analysis(
+    symbol: str,
+    exchange: str = Query("NSE"),
+    user_id: Optional[str] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """Detailed stock analysis with deterministic quantitative indicators & real or unavailable state."""
+    clean = symbol.strip().upper()
+    ex_upper = exchange.strip().upper()
+    catalog_meta = NIFTY50_STOCKS.get(clean, {})
 
-    # Step 1: Fetch quote from unified market data service
-    quote = market_data_service.get_quote(symbol, kite_token=kite_token)
-    is_live = quote.get("status") != "unavailable" and quote.get("price", 0) > 0
+    quote = await asyncio.to_thread(
+        market_data_service.get_quote, clean, False, None, user_id, ex_upper, db
+    )
+    candles = await asyncio.to_thread(
+        market_data_service.get_ohlcv, clean, "1Y", False, ex_upper
+    )
 
-    if is_live:
-        base = demo_stock or {
-            "symbol": symbol,
-            "name": quote.get("name", symbol),
-            "sector": quote.get("sector", "NSE Equity"),
-            "industry": quote.get("sector", "Equity"),
-            "market_cap": quote.get("market_cap", "Live Market"),
-            "week52_high": quote.get("week52_high", quote["price"]),
-            "week52_low": quote.get("week52_low", quote["price"]),
-            "pe_ratio": quote.get("pe_ratio", 20.0),
-        }
-        stock = {
-            **base,
+    if quote.get("status") != "unavailable" and quote.get("price"):
+        stock_data = {
+            "symbol": clean,
+            "name": quote.get("name") or catalog_meta.get("name", clean),
+            "sector": quote.get("sector") or catalog_meta.get("sector", "Equity"),
+            "exchange": quote.get("exchange", ex_upper),
             "price": quote["price"],
-            "change": quote.get("change", 0.0),
-            "change_pct": quote.get("change_pct", 0.0),
-            "volume": quote.get("volume", base.get("volume", 0)),
-            "week52_high": quote.get("week52_high", base.get("week52_high", quote["price"])),
-            "week52_low": quote.get("week52_low", base.get("week52_low", quote["price"])),
-            "pe_ratio": quote.get("pe_ratio", base.get("pe_ratio", 20.0)),
+            "change": quote.get("change"),
+            "change_percent": quote.get("change_percent"),
+            "open": quote.get("open"),
+            "high": quote.get("high"),
+            "low": quote.get("low"),
+            "volume": quote.get("volume"),
+            "week52_high": quote.get("week52_high"),
+            "week52_low": quote.get("week52_low"),
+            "upper_circuit_limit": quote.get("upper_circuit_limit"),
+            "lower_circuit_limit": quote.get("lower_circuit_limit"),
+            "pe_ratio": quote.get("pe_ratio"),
+            "pb_ratio": quote.get("pb_ratio"),
+            "market_cap": quote.get("market_cap"),
+            "source": quote.get("source"),
+            "freshness": quote.get("freshness"),
             "as_of": quote.get("as_of"),
-            "source": quote.get("source", "yfinance"),
-            "freshness": quote.get("freshness", "DELAYED (15m)"),
+            "exchange_timestamp": quote.get("exchange_timestamp"),
+            "received_at": quote.get("received_at"),
+            "price_age_seconds": quote.get("price_age_seconds"),
+            "market_session": quote.get("market_session"),
+            "connection_status": quote.get("connection_status"),
+            "status": "ok",
+        }
+    elif settings.demo_mode and clean in NIFTY50_STOCKS:
+        demo_row = NIFTY50_STOCKS[clean]
+        stock_data = {
+            **demo_row,
+            "symbol": clean,
+            "exchange": ex_upper,
+            "source": "demo_fixture",
+            "freshness": "DEMO",
+            "demo": True,
+            "as_of": datetime.now(timezone.utc).isoformat(),
+            "status": "demo",
+        }
+    else:
+        return {
+            "symbol": clean,
+            "name": catalog_meta.get("name", clean),
+            "sector": catalog_meta.get("sector"),
+            "exchange": ex_upper,
+            "price": None,
+            "status": "unavailable",
+            "freshness": "UNAVAILABLE",
+            "source": quote.get("source", "unavailable"),
+            "as_of": quote.get("as_of"),
+            "received_at": quote.get("received_at"),
+            "market_session": quote.get("market_session"),
+            "reason": quote.get(
+                "reason",
+                f"Live and delayed market data for '{clean}' ({ex_upper}) are unavailable.",
+            ),
+            "technicals": {
+                "status": "unavailable",
+                "reason": "Historical OHLCV unavailable.",
+            },
+            "ai_prediction": {
+                "status": "unavailable",
+                "reason": "Cannot issue signal without verified market data.",
+                "disclaimer": "Not investment advice.",
+            },
         }
 
-        # Calculate real quant engine technicals
-        live_data = prediction_engine.fetch_live_data(symbol)
-        technical = (
-            live_data.get("technicals")
-            if live_data and live_data.get("technicals")
-            else prediction_engine._fallback_technicals(stock["price"])
-        )
-
-    elif demo_stock:
-        demo_allowed = os.getenv("DEMO_MODE", "false").lower() == "true"
-        if demo_allowed:
-            stock = {
-                **demo_stock,
-                "is_demo": True,
-                "freshness": "UNAVAILABLE",
-                "as_of": datetime.now(timezone.utc).isoformat(),
-                "source": "demo_fixture",
-            }
-            technical = prediction_engine._fallback_technicals(stock["price"])
-            logger.info("[stocks] Using demo fixture for %s (DEMO_MODE=true)", symbol)
-        else:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "status": "unavailable",
-                    "reason": f"Live market data for '{symbol}' is unavailable from exchange. Demo data is disabled (set DEMO_MODE=true to enable demo fixtures).",
-                    "as_of": datetime.now(timezone.utc).isoformat(),
-                    "source": "yfinance",
-                    "freshness": "UNAVAILABLE",
-                },
-            )
+    # Compute deterministic technicals only from actual OHLCV candles
+    tech = await asyncio.to_thread(
+        prediction_engine.compute_technicals_from_ohlcv, candles, stock_data["price"]
+    )
+    if tech.get("status") == "unavailable":
+        stock_data["technicals"] = tech
+        stock_data["ai_prediction"] = {
+            "status": "unavailable",
+            "reason": tech.get("reason", "Insufficient historical bars for signal calculation."),
+            "disclaimer": "Deterministic analysis unavailable; not investment advice.",
+        }
     else:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Market data for '{symbol}' could not be fetched. Verify the NSE/BSE symbol.",
-        )
+        stock_data["technicals"] = tech
+        stock_data["ai_prediction"] = prediction_engine.analyze(clean, tech)
+        stock_data["ai_prediction"]["source"] = stock_data.get("source")
+        stock_data["ai_prediction"]["as_of"] = stock_data.get("as_of")
+        stock_data["ai_prediction"]["freshness"] = stock_data.get("freshness")
 
-    # Step 2: Run deterministic AI analysis
-    ai_analysis = prediction_engine.predict(symbol, stock)
+    return stock_data
 
-    # Step 3: Sentiment & risk
-    sentiment = sentiment_analyzer.analyze_stock_sentiment(symbol)
-    risk = risk_analyzer.analyze_risk(symbol, stock)
-    news = sentiment_analyzer.get_stock_news(symbol)
-
-    return {
-        "quote": {"symbol": symbol, **stock},
-        "technical": technical,
-        "ai_analysis": ai_analysis,
-        "sentiment": sentiment,
-        "risk": risk,
-        "news": news,
-    }
-
-
-# ── Single Stock Chart ────────────────────────────────────────────────────────
 
 @router.get("/{symbol}/chart")
-async def get_chart_data(symbol: str, period: str = "1Y"):
-    """Get real OHLCV chart data from unified market data service."""
-    symbol = symbol.upper()
-    data = market_data_service.get_ohlcv(symbol, period)
-    if data and isinstance(data[0], dict) and data[0].get("status") == "unavailable":
+async def get_chart_data(
+    symbol: str,
+    period: str = "1Y",
+    exchange: str = Query("NSE"),
+):
+    """Get real OHLCV chart data or explicit unavailable error."""
+    clean = symbol.strip().upper()
+    ex_upper = exchange.strip().upper()
+    data = await asyncio.to_thread(market_data_service.get_ohlcv, clean, period, False, ex_upper)
+    if not data:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "symbol": clean,
+                "exchange": ex_upper,
+                "reason": f"Historical OHLCV unavailable for {clean} ({ex_upper}).",
+            },
+        )
+    if isinstance(data[0], dict) and data[0].get("status") == "unavailable":
         raise HTTPException(status_code=503, detail=data[0])
     return data
 
 
-# ── AI Picks ──────────────────────────────────────────────────────────────────
-
 @router.get("/{symbol}/ai-picks")
-def get_ai_picks(symbol: str = ""):
-    """Get AI stock picks using live prices from market data service."""
-    picks = []
-    for sym in list(NIFTY50_STOCKS.keys())[:8]:
-        quote = market_data_service.get_quote(sym)
-        if quote.get("status") == "unavailable" or quote.get("price", 0) <= 0:
-            fallback = NIFTY50_STOCKS.get(sym, {})
-            picks.append({
+async def get_ai_picks(
+    symbol: str = "",
+    exchange: str = Query("NSE"),
+    user_id: Optional[str] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Compute deterministic rules-based stock picks ONLY from verified real quotes & OHLCV.
+    Never invents prices, signals, targets, or confidence when data is unavailable.
+    """
+    ex_upper = exchange.strip().upper()
+    target_symbols = list(NIFTY50_STOCKS.keys())[:8]
+
+    async def _evaluate_pick(sym: str) -> Dict[str, object]:
+        quote = await asyncio.to_thread(
+            market_data_service.get_quote, sym, False, None, user_id, ex_upper, db
+        )
+        if quote.get("status") == "unavailable" or not quote.get("price"):
+            return {
                 "symbol": sym,
-                "name": fallback.get("name", sym),
-                "price": {"status": "unavailable", "reason": "Market data unavailable"},
-                "change_pct": {"status": "unavailable"},
-                "signal": "HOLD",
-                "confidence": 50.0,
-                "risk_score": 5.0,
-                "sector": fallback.get("sector", "Unknown"),
-                "as_of": datetime.now(timezone.utc).isoformat(),
-                "source": "yfinance",
+                "name": NIFTY50_STOCKS.get(sym, {}).get("name", sym),
+                "exchange": ex_upper,
+                "status": "unavailable",
                 "freshness": "UNAVAILABLE",
-            })
-            continue
+                "source": quote.get("source", "unavailable"),
+                "as_of": quote.get("as_of"),
+                "reason": quote.get("reason", "Market quote unavailable."),
+                "disclaimer": "Not investment advice.",
+            }
 
-        stock_data = {**NIFTY50_STOCKS.get(sym, {}), **quote}
-        pred = prediction_engine.predict(sym, stock_data)
-        picks.append({
+        candles = await asyncio.to_thread(
+            market_data_service.get_ohlcv, sym, "1Y", False, ex_upper
+        )
+        tech = await asyncio.to_thread(
+            prediction_engine.compute_technicals_from_ohlcv, candles, quote["price"]
+        )
+        if tech.get("status") == "unavailable":
+            return {
+                "symbol": sym,
+                "name": quote.get("name") or NIFTY50_STOCKS.get(sym, {}).get("name", sym),
+                "exchange": ex_upper,
+                "price": quote["price"],
+                "change_pct": quote.get("change_percent"),
+                "status": "unavailable",
+                "freshness": quote.get("freshness", "UNAVAILABLE"),
+                "source": quote.get("source"),
+                "as_of": quote.get("as_of"),
+                "reason": tech.get("reason", "Insufficient OHLCV history."),
+                "disclaimer": "Not investment advice.",
+            }
+
+        pred = prediction_engine.analyze(sym, tech)
+        return {
             "symbol": sym,
-            "name": quote.get("name", NIFTY50_STOCKS.get(sym, {}).get("name", sym)),
+            "name": quote.get("name") or NIFTY50_STOCKS.get(sym, {}).get("name", sym),
+            "exchange": ex_upper,
             "price": quote["price"],
-            "change_pct": quote.get("change_pct", 0),
-            "signal": pred["signal"],
-            "confidence": pred["confidence"],
-            "risk_score": pred["risk_score"],
-            "sector": quote.get("sector", NIFTY50_STOCKS.get(sym, {}).get("sector", "Unknown")),
+            "change_pct": quote.get("change_percent"),
+            "signal": pred.get("signal"),
+            "confidence": pred.get("confidence"),
+            "target": pred.get("target_price"),
+            "stop_loss": pred.get("stop_loss"),
+            "rule_version": pred.get("rule_version"),
+            "rationale": pred.get("rationale"),
+            "status": "ok",
+            "source": quote.get("source"),
+            "freshness": quote.get("freshness"),
             "as_of": quote.get("as_of"),
-            "source": quote.get("source", "yfinance"),
-            "freshness": quote.get("freshness", "DELAYED (15m)"),
-        })
+            "disclaimer": "Deterministic quantitative rules only. Not investment advice.",
+        }
 
-    picks.sort(key=lambda x: x["confidence"] if isinstance(x["confidence"], (int, float)) else 0, reverse=True)
-    return picks
+    picks = await asyncio.gather(*(_evaluate_pick(s) for s in target_symbols))
+    return list(picks)

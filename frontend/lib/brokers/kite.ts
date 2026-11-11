@@ -80,7 +80,7 @@ export class KiteBrokerAdapter implements BrokerAdapter {
       if (data.status === 'error') {
         return {
           success: false,
-          status: 'REJECTED',
+          status: res.status >= 500 ? 'UNKNOWN' : 'REJECTED',
           message: data.message || 'Kite order placement failed',
           raw_response: data,
         };
@@ -94,11 +94,12 @@ export class KiteBrokerAdapter implements BrokerAdapter {
         raw_response: data,
       };
     } catch (err: any) {
-      console.error('[Kite Order Error]', err.message);
+      // Network timeout/abort leaves remote broker state ambiguous -> UNKNOWN (never blind-retry)
+      console.error('[Kite Order Error - Ambiguous State]', err.message);
       return {
         success: false,
-        status: 'REJECTED',
-        message: err.message || 'Network error communicating with Zerodha Kite API',
+        status: 'UNKNOWN',
+        message: err.message || 'Ambiguous network outcome communicating with Zerodha Kite API; reconcile before retrying.',
       };
     }
   }
@@ -106,7 +107,7 @@ export class KiteBrokerAdapter implements BrokerAdapter {
   async getOrderStatus(accessToken: string, orderId: string): Promise<OrderStatus> {
     if (!this.apiKey) {
       if (this.isSandbox) return 'COMPLETE';
-      return 'REJECTED';
+      return 'UNKNOWN';
     }
 
     try {
@@ -116,16 +117,52 @@ export class KiteBrokerAdapter implements BrokerAdapter {
           'Authorization': `token ${this.apiKey}:${accessToken}`,
         },
       });
+      if (!res.ok) return 'UNKNOWN';
       const data = await res.json();
-      if (data.status === 'success' && data.data && data.data.length > 0) {
-        const lastState = data.data[data.data.length - 1].status;
+      if (data.status === 'success' && Array.isArray(data.data) && data.data.length > 0) {
+        const latest = data.data[data.data.length - 1];
+        const lastState = String(latest.status || '').toUpperCase();
         if (lastState === 'COMPLETE') return 'COMPLETE';
         if (lastState === 'REJECTED') return 'REJECTED';
         if (lastState === 'CANCELLED') return 'CANCELLED';
+        if (lastState === 'OPEN' || lastState === 'TRIGGER PENDING') return 'OPEN';
+        if ((latest.filled_quantity || 0) > 0 && (latest.pending_quantity || 0) > 0) return 'PARTIAL';
+        return 'PLACED';
       }
-      return 'PLACED';
-    } catch (e) {
-      return 'PLACED';
+      return 'UNKNOWN';
+    } catch {
+      return 'UNKNOWN';
+    }
+  }
+
+  async findOrderByTag(accessToken: string, tag: string): Promise<{ order_id: string; status: OrderStatus } | null> {
+    if (!this.apiKey || !tag) return null;
+    try {
+      const res = await fetch('https://api.kite.trade/orders', {
+        headers: {
+          'X-Kite-Version': '3',
+          'Authorization': `token ${this.apiKey}:${accessToken}`,
+        },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const orders = Array.isArray(data?.data) ? data.data : [];
+      const match = orders.find((o: any) => o.tag === tag);
+      if (!match) return null;
+      const st = String(match.status || '').toUpperCase();
+      const mapped: OrderStatus =
+        st === 'COMPLETE'
+          ? 'COMPLETE'
+          : st === 'REJECTED'
+          ? 'REJECTED'
+          : st === 'CANCELLED'
+          ? 'CANCELLED'
+          : st === 'OPEN'
+          ? 'OPEN'
+          : 'PLACED';
+      return { order_id: String(match.order_id), status: mapped };
+    } catch {
+      return null;
     }
   }
 

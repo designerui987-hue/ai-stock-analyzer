@@ -83,35 +83,82 @@ class PredictionEngine:
     # All mathematical computations live here. Never moved to the LLM.
     # ------------------------------------------------------------------
 
-    def calculate_technicals(self, ticker: yf.Ticker, price: float) -> dict:
-        """
-        Calculate real live technical indicators using historical OHLCV data.
-        Returns a flat dict of computed indicators.
-        """
-        try:
-            hist = ticker.history(period="6mo")
-            if hist.empty or len(hist) < 20:
-                return self._fallback_technicals(price)
+    @staticmethod
+    def _wilder_rsi(close: pd.Series, period: int = 14) -> Optional[float]:
+        if len(close) < period + 1:
+            return None
+        vals = [float(x) for x in close.tolist()]
+        gain_sum = 0.0
+        loss_sum = 0.0
+        for i in range(1, period + 1):
+            diff = vals[i] - vals[i - 1]
+            if diff >= 0:
+                gain_sum += diff
+            else:
+                loss_sum += abs(diff)
+        avg_gain = gain_sum / period
+        avg_loss = loss_sum / period
+        for i in range(period + 1, len(vals)):
+            diff = vals[i] - vals[i - 1]
+            g = diff if diff > 0 else 0.0
+            l = abs(diff) if diff < 0 else 0.0
+            avg_gain = (avg_gain * (period - 1) + g) / period
+            avg_loss = (avg_loss * (period - 1) + l) / period
+        if avg_loss == 0:
+            return 50.0 if avg_gain == 0 else 100.0
+        rs = avg_gain / avg_loss
+        return round(100.0 - (100.0 / (1.0 + rs)), 2)
 
-            close = hist["Close"]
-            high = hist["High"]
-            low = hist["Low"]
-            volume = hist["Volume"]
+    @staticmethod
+    def _wilder_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> Optional[float]:
+        if len(close) < period + 1:
+            return None
+        h = [float(x) for x in high.tolist()]
+        l = [float(x) for x in low.tolist()]
+        c = [float(x) for x in close.tolist()]
+        trs = [
+            max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1]))
+            for i in range(1, len(c))
+        ]
+        atr = sum(trs[:period]) / period
+        for tr_val in trs[period:]:
+            atr = (atr * (period - 1) + tr_val) / period
+        return round(atr, 2)
 
-            # --- RSI 14 ---
-            delta = close.diff()
-            gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / (loss + 1e-9)
-            rsi_series = 100 - (100 / (1 + rs))
-            rsi = round(float(rsi_series.iloc[-1]), 2) if not pd.isna(rsi_series.iloc[-1]) else 50.0
+    def compute_technicals_from_ohlcv(
+        self,
+        candles: Optional[List[Dict[str, Any]]],
+        price: float,
+        exclude_incomplete: bool = True,
+    ) -> dict:
+        """Compute verified Wilder & moving-average indicators from OHLCV list."""
+        if not candles:
+            return {"status": "unavailable", "reason": "OHLCV history unavailable."}
+        rows = [
+            c for c in candles
+            if isinstance(c, dict) and (not exclude_incomplete or c.get("completed", True) is not False)
+        ]
+        if len(rows) < 20:
+            return {
+                "status": "unavailable",
+                "reason": f"Insufficient completed bars ({len(rows)} < 20 required).",
+            }
 
-            # --- Simple Moving Averages ---
-            sma_20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else price
-            sma_50 = round(float(close.rolling(50).mean().iloc[-1]), 2) if len(close) >= 50 else price
-            sma_200 = round(float(close.rolling(200).mean().iloc[-1]), 2) if len(close) >= 200 else price
+        df = pd.DataFrame(rows)
+        close = df["close"].astype(float)
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        volume = df["volume"].astype(float)
 
-            # --- MACD (12, 26, 9) ---
+        rsi = self._wilder_rsi(close, 14)
+        atr = self._wilder_atr(high, low, close, 14)
+
+        sma_20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
+        sma_50 = round(float(close.rolling(50).mean().iloc[-1]), 2) if len(close) >= 50 else None
+        sma_200 = round(float(close.rolling(200).mean().iloc[-1]), 2) if len(close) >= 200 else None
+
+        macd = macd_signal = macd_hist = None
+        if len(close) >= 35:
             ema_12 = close.ewm(span=12, adjust=False).mean()
             ema_26 = close.ewm(span=26, adjust=False).mean()
             macd_series = ema_12 - ema_26
@@ -120,60 +167,88 @@ class PredictionEngine:
             macd_signal = round(float(macd_sig_series.iloc[-1]), 4)
             macd_hist = round(macd - macd_signal, 4)
 
-            # --- Bollinger Bands (20, ±2σ) ---
-            std_20 = float(close.rolling(20).std().iloc[-1]) if len(close) >= 20 else price * 0.02
+        bollinger_upper = bollinger_lower = None
+        if len(close) >= 20 and sma_20 is not None:
+            std_20 = float(close.rolling(20).std().iloc[-1])
             bollinger_upper = round(sma_20 + (2 * std_20), 2)
             bollinger_lower = round(sma_20 - (2 * std_20), 2)
 
-            # --- ATR 14 ---
-            tr = pd.concat(
-                [high - low, (high - close.shift()).abs(), (low - close.shift()).abs()],
-                axis=1,
-            ).max(axis=1)
-            atr = (
-                round(float(tr.rolling(14).mean().iloc[-1]), 2)
-                if len(tr) >= 14
-                else round(price * 0.02, 2)
-            )
+        vol_20_avg = float(volume.rolling(20).mean().iloc[-1]) if len(volume) >= 20 else None
+        vol_surge = round(float(volume.iloc[-1]) / vol_20_avg, 2) if vol_20_avg and vol_20_avg > 0 else None
+        return_1m = (
+            round(float(((price - close.iloc[-22]) / close.iloc[-22]) * 100), 2)
+            if len(close) >= 22 and close.iloc[-22] > 0
+            else None
+        )
+        return_3m = (
+            round(float(((price - close.iloc[-65]) / close.iloc[-65]) * 100), 2)
+            if len(close) >= 65 and close.iloc[-65] > 0
+            else None
+        )
 
-            # --- Volume Surge Ratio ---
-            vol_20_avg = (
-                float(volume.rolling(20).mean().iloc[-1])
-                if len(volume) >= 20
-                else float(volume.iloc[-1])
-            )
-            vol_surge = round(float(volume.iloc[-1]) / vol_20_avg, 2) if vol_20_avg > 0 else 1.0
+        return {
+            "price": price,
+            "bar_count": len(rows),
+            "rsi": rsi,
+            "macd": macd,
+            "macd_signal": macd_signal,
+            "macd_hist": macd_hist,
+            "sma_20": sma_20,
+            "sma_50": sma_50,
+            "sma_200": sma_200,
+            "bollinger_upper": bollinger_upper,
+            "bollinger_lower": bollinger_lower,
+            "atr": atr,
+            "vol_surge": vol_surge,
+            "return_1m": return_1m,
+            "return_3m": return_3m,
+        }
 
-            # --- Momentum Returns ---
-            return_1m = (
-                round(float(((price - close.iloc[-22]) / close.iloc[-22]) * 100), 2)
-                if len(close) >= 22
-                else 0.0
-            )
-            return_3m = (
-                round(float(((price - close.iloc[-65]) / close.iloc[-65]) * 100), 2)
-                if len(close) >= 65
-                else 0.0
-            )
-
+    def analyze(self, symbol: str, technicals: dict) -> dict:
+        """Deterministic rule evaluation from computed technicals dict."""
+        if not technicals or technicals.get("status") == "unavailable":
             return {
-                "rsi": rsi,
-                "macd": macd,
-                "macd_signal": macd_signal,
-                "macd_hist": macd_hist,
-                "sma_20": sma_20,
-                "sma_50": sma_50,
-                "sma_200": sma_200,
-                "bollinger_upper": bollinger_upper,
-                "bollinger_lower": bollinger_lower,
-                "atr": atr,
-                "vol_surge": vol_surge,
-                "return_1m": return_1m,
-                "return_3m": return_3m,
+                "status": "unavailable",
+                "reason": (technicals or {}).get("reason", "Technicals unavailable."),
+                "disclaimer": "Not investment advice.",
             }
+        price = technicals.get("price")
+        pred = self._fallback_predict(symbol, {"price": price}, technicals)
+        return {
+            "signal": pred.get("signal", "HOLD"),
+            "confidence": pred.get("confidence"),
+            "target_price": pred.get("exit_price"),
+            "stop_loss": pred.get("stop_loss"),
+            "rule_version": pred.get("rule_version", "tech_consensus_v1"),
+            "rationale": pred.get("explanation"),
+            "factors": pred.get("factors", []),
+            "prediction_models": {},
+            "disclaimer": "Deterministic quantitative rules only. Not investment advice.",
+        }
 
+    def calculate_technicals(self, ticker: yf.Ticker, price: float) -> dict:
+        """Calculate Wilder & moving-average technical indicators from yfinance history."""
+        try:
+            hist = ticker.history(period="6mo")
+            if hist.empty or len(hist) < 20:
+                return self._fallback_technicals(price)
+
+            candles = [
+                {
+                    "open": float(r["Open"]),
+                    "high": float(r["High"]),
+                    "low": float(r["Low"]),
+                    "close": float(r["Close"]),
+                    "volume": float(r["Volume"]),
+                }
+                for _, r in hist.iterrows()
+            ]
+            res = self.compute_technicals_from_ohlcv(candles, price, exclude_incomplete=False)
+            if res.get("status") == "unavailable":
+                return self._fallback_technicals(price)
+            return res
         except Exception as exc:
-            logger.warning("[PredictionEngine] Technical calculation error for %s: %s", "unknown", exc)
+            logger.warning("[PredictionEngine] Technical calculation error: %s", exc)
             return self._fallback_technicals(price)
 
     def _fallback_technicals(self, price: float) -> dict:
@@ -398,21 +473,23 @@ class PredictionEngine:
         }
 
     def _default_prediction(self, symbol: str) -> Dict:
-        """Return a safe default when no market data could be obtained at all."""
+        """Return explicit unavailable state when no market data could be obtained."""
         return {
+            "status": "unavailable",
             "signal": "HOLD",
-            "confidence": 50.0,
-            "risk_score": 5.0,
-            "entry_price": 0,
-            "exit_price": 0,
-            "stop_loss": 0,
-            "profit_probability": 50.0,
+            "confidence": None,
+            "risk_score": None,
+            "entry_price": None,
+            "exit_price": None,
+            "stop_loss": None,
+            "profit_probability": None,
             "explanation": f"Insufficient data for {symbol}. Market data could not be retrieved.",
             "factors": ["Data unavailable"],
-            "pe_ratio": 20.0,
-            "rsi": 50.0,
-            "macd": 0.0,
+            "pe_ratio": None,
+            "rsi": None,
+            "macd": None,
             "prediction_models": {},
+            "disclaimer": "Not investment advice.",
         }
 
 

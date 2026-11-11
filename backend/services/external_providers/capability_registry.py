@@ -2,17 +2,17 @@
 External Data Provider Capability Registry.
 
 Central typed registry tracking every supplemental API discovered from public-apis:
-- enabled state and exact disabled/unavailable reason
-- supported capabilities vs disabled endpoints/features
-- market coverage, entitlement tier, plan gating
-- quota limits, remaining quota (estimated), reset time
-- live adapter health and last successful refresh
-- data frequency and freshness policy (never promoted to LIVE)
+- Configuration read strictly via central validated `Settings` (never `os.environ`)
+- Enabled state and exact disabled/unavailable reason
+- Distinct runtime states: CONFIGURED, UNVERIFIED, HEALTHY, DEGRADED, UNAVAILABLE
+  (plus KEY_REQUIRED, QUOTA_EXHAUSTED, DEV_ONLY where disabled/exhausted; never CONNECTED)
+- Actual `last_refresh` recorded only after a successful upstream request
 """
 
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+from config import Settings, get_settings
 
 
 @dataclass
@@ -25,6 +25,7 @@ class ProviderInfo:
     disabled_features: Dict[str, str]
     market_coverage: List[str]
     entitlement: str  # "free_no_key" | "free_key_required" | "paid_required"
+    key_setting_attr: Optional[str]
     key_env_var: Optional[str]
     dev_only: bool
     quota_per_day: Optional[int]
@@ -38,8 +39,8 @@ class ProviderInfo:
     terms_url: str
     docs_url: str
     enabled: bool = False
-    status_label: str = "UNAVAILABLE"  # CONNECTED | KEY_REQUIRED | QUOTA_EXHAUSTED | UNAVAILABLE | DEV_ONLY
-    health: str = "unknown"
+    status_label: str = "UNAVAILABLE"  # CONFIGURED | UNVERIFIED | HEALTHY | DEGRADED | UNAVAILABLE | KEY_REQUIRED | QUOTA_EXHAUSTED | DEV_ONLY
+    health: str = "unverified"
     unavailable_reason: Optional[str] = None
     last_refresh: Optional[str] = None
     quota_remaining: Optional[int] = None
@@ -49,32 +50,29 @@ class ProviderInfo:
 
 
 class CapabilityRegistry:
-    """Evaluates provider entitlement, env keys, plan limits, and runtime health."""
+    """Evaluates provider entitlement, central Settings keys, plan limits, and runtime health."""
 
-    def __init__(self):
+    def __init__(self, app_settings: Optional[Settings] = None):
+        self._settings: Settings = app_settings or get_settings(reload=True)
         self._providers: Dict[str, ProviderInfo] = {}
         self._build_registry()
 
-    @staticmethod
-    def _app_env() -> str:
-        return (os.environ.get("APP_ENV") or "development").strip().lower()
-
-    @staticmethod
-    def _is_production() -> bool:
-        return CapabilityRegistry._app_env() == "production"
-
     def _register(self, info: ProviderInfo) -> None:
-        is_prod = self._is_production()
-        if info.dev_only and (is_prod or os.environ.get("GNEWS_DEV_MODE", "false").lower() != "true"):
+        is_explicit_dev = self._settings.is_explicit_development
+        is_prod = self._settings.is_production
+        td_plan = (self._settings.twelvedata_plan or "free").strip().lower()
+
+        if info.dev_only and (not is_explicit_dev or not self._settings.gnews_dev_mode):
             info.enabled = False
-            info.status_label = "DEV_ONLY" if not is_prod else "UNAVAILABLE"
+            info.status_label = "DEV_ONLY" if (is_explicit_dev and not is_prod) else "UNAVAILABLE"
             info.health = "disabled"
             info.unavailable_reason = (
-                f"{info.display_name} free plan terms prohibit production use. "
-                "Requires non-production APP_ENV and GNEWS_DEV_MODE=true."
+                f"{info.display_name} free plan terms prohibit production or non-development use. "
+                "Requires explicit APP_ENV=development and GNEWS_DEV_MODE=true."
             )
         elif info.entitlement == "free_key_required":
-            key_present = bool(info.key_env_var and os.environ.get(info.key_env_var))
+            raw_key = getattr(self._settings, info.key_setting_attr, None) if info.key_setting_attr else None
+            key_present = bool(raw_key and str(raw_key).strip())
             if not key_present:
                 info.enabled = False
                 info.status_label = "KEY_REQUIRED"
@@ -82,23 +80,23 @@ class CapabilityRegistry:
                 info.unavailable_reason = (
                     f"API key not configured. Set server-side {info.key_env_var}."
                 )
-            elif info.provider_id == "twelve_data" and is_prod and (
-                os.environ.get("TWELVEDATA_PLAN", "free").lower() == "free"
-            ):
+            elif info.provider_id == "twelve_data" and td_plan == "free" and not is_explicit_dev:
                 info.enabled = False
                 info.status_label = "UNAVAILABLE"
                 info.health = "disabled"
                 info.unavailable_reason = (
-                    "Twelve Data free Basic plan terms prohibit production deployment and NSE access."
+                    "Twelve Data free Basic plan terms restrict use to explicit development evaluation "
+                    "only and do not cover NSE."
                 )
             else:
                 info.enabled = True
-                info.status_label = "CONNECTED"
-                info.health = "healthy"
+                # Configured key != verified live connection until a request succeeds
+                info.status_label = "CONFIGURED"
+                info.health = "unverified"
         elif info.entitlement == "free_no_key":
             info.enabled = True
-            info.status_label = "CONNECTED"
-            info.health = "healthy"
+            info.status_label = "UNVERIFIED"
+            info.health = "unverified"
         else:
             info.enabled = False
             info.status_label = "UNAVAILABLE"
@@ -108,8 +106,8 @@ class CapabilityRegistry:
         self._providers[info.provider_id] = info
 
     def _build_registry(self) -> None:
-        av_plan = (os.environ.get("ALPHA_VANTAGE_PLAN") or "free").strip().lower()
-        td_plan = (os.environ.get("TWELVEDATA_PLAN") or "free").strip().lower()
+        av_plan = (self._settings.alpha_vantage_plan or "free").strip().lower()
+        td_plan = (self._settings.twelvedata_plan or "free").strip().lower()
 
         self._register(ProviderInfo(
             provider_id="frankfurter",
@@ -125,6 +123,7 @@ class CapabilityRegistry:
             },
             market_coverage=["FX Reference Rates (ECB currencies including INR)"],
             entitlement="free_no_key",
+            key_setting_attr=None,
             key_env_var=None,
             dev_only=False,
             quota_per_day=None,
@@ -137,7 +136,7 @@ class CapabilityRegistry:
             freshness_policy="REFERENCE_RATE",
             terms_url="https://frankfurter.dev/terms/",
             docs_url="https://frankfurter.dev/docs/",
-            verification_status="verified_live_request",
+            verification_status="docs_and_fixture_verified",
         ))
 
         self._register(ProviderInfo(
@@ -159,6 +158,7 @@ class CapabilityRegistry:
             },
             market_coverage=["India Macro (CC BY 4.0)"],
             entitlement="free_no_key",
+            key_setting_attr=None,
             key_env_var=None,
             dev_only=False,
             quota_per_day=None,
@@ -171,7 +171,7 @@ class CapabilityRegistry:
             freshness_policy="END_OF_DAY",
             terms_url="https://datacatalog.worldbank.org/public-licenses#cc-by",
             docs_url="https://datahelpdesk.worldbank.org/knowledgebase/topics/125589",
-            verification_status="verified_live_request",
+            verification_status="docs_and_fixture_verified",
         ))
 
         self._register(ProviderInfo(
@@ -188,6 +188,7 @@ class CapabilityRegistry:
             },
             market_coverage=["Indian Mutual Funds (AMFI)"],
             entitlement="free_no_key",
+            key_setting_attr=None,
             key_env_var=None,
             dev_only=False,
             quota_per_day=None,
@@ -200,28 +201,34 @@ class CapabilityRegistry:
             freshness_policy="NAV",
             terms_url="https://www.mfapi.in/",
             docs_url="https://www.mfapi.in/",
-            verification_status="verified_live_request",
+            verification_status="docs_and_fixture_verified",
         ))
 
+        av_caps = ["bse_daily_eod_unadjusted", "fx_exchange_rate"]
         av_disabled = {
             "live_nse_quotes": "Alpha Vantage does not supply free live NSE quotes.",
             "nse_symbols": "NSE symbols (.NS) disabled on free tier due to unreliable upstream coverage; BSE EOD research only.",
         }
-        if av_plan != "premium":
-            av_disabled["TIME_SERIES_DAILY_ADJUSTED"] = "Premium endpoint on Alpha Vantage (returns quota/paywall notice on free keys)."
+        if av_plan == "premium":
+            av_caps.append("bse_daily_eod_adjusted")
+        else:
+            av_disabled["TIME_SERIES_DAILY_ADJUSTED"] = (
+                "Premium endpoint on Alpha Vantage (returns paywall notice on free keys; requires ALPHA_VANTAGE_PLAN=premium)."
+            )
 
         self._register(ProviderInfo(
             provider_id="alpha_vantage",
             display_name="Alpha Vantage",
             description=(
                 "Optional research provider (25 req/day, 5/min on free key). "
-                "BSE unadjusted EOD and FX research only — does NOT supply free live NSE quotes."
+                "BSE EOD and FX research only — does NOT supply free live NSE quotes."
             ),
             base_url="https://www.alphavantage.co/query",
-            capabilities=["bse_daily_eod_unadjusted", "fx_exchange_rate"],
+            capabilities=av_caps,
             disabled_features=av_disabled,
-            market_coverage=["BSE (EOD unadjusted research)", "FX"],
+            market_coverage=["BSE (EOD research only)", "FX"],
             entitlement="free_key_required",
+            key_setting_attr="alpha_vantage_api_key",
             key_env_var="ALPHA_VANTAGE_API_KEY",
             dev_only=False,
             quota_per_day=25,
@@ -242,7 +249,7 @@ class CapabilityRegistry:
             "commercial_production": "Twelve Data Terms §2.3 restrict free Basic plan to internal evaluation/testing.",
         }
         if td_plan == "free":
-            td_disabled["nse_time_series"] = "India NSE requires paid Grow/Pro/Ultra plan."
+            td_disabled["nse_time_series"] = "India NSE/BSE equity research requires paid Grow/Pro/Ultra plan."
 
         self._register(ProviderInfo(
             provider_id="twelve_data",
@@ -254,8 +261,9 @@ class CapabilityRegistry:
             base_url="https://api.twelvedata.com",
             capabilities=["paid_time_series", "paid_eod_quote"] if td_plan != "free" else [],
             disabled_features=td_disabled,
-            market_coverage=["NSE/BSE (Paid Grow+ plans only; US/FX free eval)"],
+            market_coverage=["NSE/BSE (Paid Grow+ plans only; US/FX dev eval)"],
             entitlement="free_key_required",
+            key_setting_attr="twelvedata_api_key",
             key_env_var="TWELVEDATA_API_KEY",
             dev_only=False,
             quota_per_day=800,
@@ -286,6 +294,7 @@ class CapabilityRegistry:
             },
             market_coverage=["India News (Dev Only, 12h Delayed)"],
             entitlement="free_key_required",
+            key_setting_attr="gnews_api_key",
             key_env_var="GNEWS_API_KEY",
             dev_only=True,
             quota_per_day=100,
@@ -330,7 +339,7 @@ class CapabilityRegistry:
         return bool(info and info.enabled)
 
     def get_status(self) -> List[Dict[str, Any]]:
-        """Serialize provider capabilities, live health, quota estimates, and disable reasons."""
+        """Serialize provider capabilities, live runtime health, quota state, and disable reasons."""
         adapters = self._adapter_map()
         statuses: List[Dict[str, Any]] = []
 
@@ -345,8 +354,18 @@ class CapabilityRegistry:
                 if adapter.last_health == "quota_exhausted" or quota_info.get("quota_remaining") == 0:
                     health = "quota_exhausted"
                     status_label = "QUOTA_EXHAUSTED"
-                elif adapter.last_health in ("healthy", "degraded"):
-                    health = adapter.last_health
+                elif quota_info.get("rate_limited") or adapter.last_health == "degraded":
+                    health = "degraded"
+                    status_label = "DEGRADED"
+                elif adapter.last_health == "healthy" and last_refresh is not None:
+                    health = "healthy"
+                    status_label = "HEALTHY"
+                else:
+                    # Configured keyed provider vs unverified free provider prior to first real success
+                    health = "unverified"
+                    status_label = (
+                        "CONFIGURED" if p.entitlement == "free_key_required" else "UNVERIFIED"
+                    )
 
             statuses.append({
                 "provider_id": p.provider_id,
@@ -366,7 +385,10 @@ class CapabilityRegistry:
                 "quota_per_minute": p.quota_per_minute,
                 "credit_weight": p.credit_weight,
                 "quota_remaining": quota_info.get("quota_remaining"),
+                "quota_used_today": quota_info.get("quota_used_today"),
                 "quota_is_estimated": quota_info.get("quota_is_estimated", False),
+                "rate_limited": quota_info.get("rate_limited", False),
+                "quota_scope": quota_info.get("quota_scope"),
                 "reset_time": quota_info.get("reset_time"),
                 "cache_ttl_seconds": p.cache_ttl_seconds,
                 "caching_permitted": p.caching_permitted,
@@ -381,4 +403,3 @@ class CapabilityRegistry:
 
 
 registry = CapabilityRegistry()
-

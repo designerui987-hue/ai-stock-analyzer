@@ -1,134 +1,250 @@
-"""Market overview API endpoints with real-time live market data."""
+"""
+Market Overview API Router.
 
-import yfinance as yf
+Hard rules enforced:
+- No hardcoded index values (`fallback_val` removed).
+- No fabricated market breadth (`34/16`), FII/DII numbers (`+647/+267 Cr`), or static `DEMO_NEWS`
+  in normal user-facing paths; return explicit `unavailable` with timestamp & reason.
+- Demo fixtures allowed ONLY when explicit `settings.demo_mode == True`.
+"""
+
+import asyncio
+from datetime import datetime, timezone
+from typing import Any, Dict, List
+
 from fastapi import APIRouter
-from data.demo_stocks import NIFTY50_STOCKS, SECTORS, DEMO_NEWS
-from ai_models.sentiment_analyzer import market_regime_detector
+import yfinance as yf
+
+from config import settings
+from data.demo_stocks import DEMO_NEWS, NIFTY50_STOCKS, SECTORS
+from services.market_data_service import MarketHours, market_data_service
 
 router = APIRouter()
 
-def get_live_indices():
-    """Fetch live index values for NIFTY, SENSEX, BANKNIFTY, NIFTY IT."""
-    index_map = {
-        "^NSEI": ("NIFTY50", 24383.60),
-        "^BSESN": ("SENSEX", 78100.68),
-        "^NSEBANK": ("BANKNIFTY", 57264.85),
-        "^CNXIT": ("NIFTYIT", 30708.90),
-    }
-    result = []
-    try:
-        tickers = yf.Tickers(" ".join(index_map.keys()))
-        for symbol, (name, fallback_val) in index_map.items():
-            t = tickers.tickers.get(symbol)
-            if t:
-                info = t.info
-                val = info.get("regularMarketPrice", info.get("currentPrice", fallback_val))
-                prev = info.get("previousClose", val)
-                chg = val - prev
-                chg_pct = (chg / prev * 100) if prev else 0.0
-                result.append({
-                    "symbol": name,
-                    "value": round(val, 2),
-                    "change": round(chg, 2),
-                    "change_pct": round(chg_pct, 2)
-                })
-            else:
-                result.append({"symbol": name, "value": fallback_val, "change": 0.0, "change_pct": 0.0})
-    except Exception as e:
-        print(f"Error fetching live indices: {e}")
-        for symbol, (name, fallback_val) in index_map.items():
-            result.append({"symbol": name, "value": fallback_val, "change": 0.0, "change_pct": 0.0})
-    return result
+INDEX_SPECS = [
+    {"symbol": "^NSEI", "name": "NIFTY 50"},
+    {"symbol": "^BSESN", "name": "SENSEX"},
+    {"symbol": "^NSEBANK", "name": "BANK NIFTY"},
+    {"symbol": "^INDIAVIX", "name": "INDIA VIX"},
+]
 
 
-def fetch_live_stock_summaries():
-    """Fetch live quote summaries for tracking list."""
-    live_list = []
-    popular_symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "BHARTIARTL", "SBIN", "ITC", "WIPRO", "LT"]
-    for sym in popular_symbols:
+def _fetch_live_indices_sync() -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for spec in INDEX_SPECS:
         try:
-            ticker = yf.Ticker(f"{sym}.NS")
-            info = ticker.info
-            price = info.get("currentPrice", info.get("regularMarketPrice", 0))
-            prev = info.get("previousClose", price)
-            chg = price - prev
-            chg_pct = ((price - prev) / prev * 100) if prev else 0.0
-            base = NIFTY50_STOCKS.get(sym, {"name": sym, "sector": "Equity"})
-            live_list.append({
-                "symbol": sym,
-                "name": info.get("longName", base.get("name", sym)),
-                "price": round(price, 2),
-                "change": round(chg, 2),
-                "change_pct": round(chg_pct, 2),
-                "volume": info.get("volume", 0),
-                "sector": info.get("sector", base.get("sector", "Equity")),
-                "market_cap": f"{round(price * info.get('volume', 100000) / 1e7, 2)} Cr"
-            })
+            ticker = yf.Ticker(spec["symbol"])
+            info = ticker.info or {}
+            price = info.get("regularMarketPrice") or info.get("currentPrice")
+            prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
+            raw_mkt_time = info.get("regularMarketTime")
+            obs_iso = (
+                datetime.fromtimestamp(float(raw_mkt_time), tz=timezone.utc).isoformat()
+                if isinstance(raw_mkt_time, (int, float))
+                else None
+            )
+
+            if price is None or obs_iso is None:
+                hist = ticker.history(period="5d", interval="1d")
+                if not hist.empty:
+                    if price is None:
+                        price = float(hist.iloc[-1]["Close"])
+                    if prev is None and len(hist) > 1:
+                        prev = float(hist.iloc[-2]["Close"])
+                    if obs_iso is None and hasattr(hist.index[-1], "to_pydatetime"):
+                        dt_val = hist.index[-1].to_pydatetime()
+                        if dt_val.tzinfo is None:
+                            dt_val = dt_val.replace(tzinfo=timezone.utc)
+                        obs_iso = dt_val.astimezone(timezone.utc).isoformat()
+
+            if price and obs_iso:
+                price_f = round(float(price), 2)
+                prev_f = round(float(prev), 2) if prev else price_f
+                chg = round(price_f - prev_f, 2)
+                chg_pct = round((chg / prev_f) * 100.0, 2) if prev_f > 0 else 0.0
+                results.append({
+                    "name": spec["name"],
+                    "symbol": spec["symbol"],
+                    "value": price_f,
+                    "change": chg,
+                    "change_percent": chg_pct,
+                    "source": "yfinance",
+                    "freshness": MarketHours.calculate_freshness(as_of=obs_iso, is_realtime=False),
+                    "as_of": obs_iso,
+                    "received_at": now_iso,
+                    "status": "ok",
+                })
+                continue
         except Exception:
-            base = NIFTY50_STOCKS.get(sym)
-            if base:
-                live_list.append({"symbol": sym, **base})
-    return live_list
+            pass
+
+        results.append({
+            "name": spec["name"],
+            "symbol": spec["symbol"],
+            "value": None,
+            "change": None,
+            "change_percent": None,
+            "source": "unavailable",
+            "freshness": "UNAVAILABLE",
+            "as_of": None,
+            "received_at": now_iso,
+            "status": "unavailable",
+            "reason": "Index quote or observation timestamp unavailable.",
+        })
+    return results
+
+
+def _fetch_constituent_quotes_sync() -> List[Dict[str, Any]]:
+    symbols = list(NIFTY50_STOCKS.keys())[:10]
+    quotes = market_data_service.get_watchlist_quotes(symbols)
+    out: List[Dict[str, Any]] = []
+    for sym, q in quotes.items():
+        if q.get("status") != "unavailable" and q.get("price"):
+            meta = NIFTY50_STOCKS.get(sym, {})
+            out.append({
+                "symbol": sym,
+                "name": q.get("name") or meta.get("name", sym),
+                "sector": q.get("sector") or meta.get("sector", "Equity"),
+                "price": q["price"],
+                "change": q.get("change"),
+                "change_percent": q.get("change_percent"),
+                "volume": q.get("volume"),
+                "source": q.get("source"),
+                "freshness": q.get("freshness"),
+                "as_of": q.get("as_of"),
+            })
+    return out
 
 
 @router.get("/overview")
-def market_overview():
-    """Get real-time market overview with live indices and market regime."""
-    indices = get_live_indices()
-    regime = market_regime_detector.detect_regime()
+async def market_overview():
+    """Indian market overview with strict real/unavailable separation (never hardcoded values)."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    indices, constituents = await asyncio.gather(
+        asyncio.to_thread(_fetch_live_indices_sync),
+        asyncio.to_thread(_fetch_constituent_quotes_sync),
+    )
+
+    advances = sum(1 for c in constituents if (c.get("change_percent") or 0) > 0)
+    declines = sum(1 for c in constituents if (c.get("change_percent") or 0) < 0)
+    unchanged = max(0, len(constituents) - advances - declines)
+
+    breadth = (
+        {
+            "advances": advances,
+            "declines": declines,
+            "unchanged": unchanged,
+            "sample_size": len(constituents),
+            "status": "ok",
+            "source": constituents[0].get("source", "yfinance"),
+        }
+        if constituents
+        else {
+            "advances": None,
+            "declines": None,
+            "unchanged": None,
+            "sample_size": 0,
+            "status": "unavailable",
+            "reason": "Constituent quotes unavailable to compute market breadth.",
+        }
+    )
+
+    if settings.demo_mode:
+        fii_activity: Dict[str, Any] = {
+            "buy_cr": 12450.0,
+            "sell_cr": 11802.0,
+            "net_cr": 647.82,
+            "source": "demo_fixture",
+            "demo": True,
+        }
+        dii_activity: Dict[str, Any] = {
+            "buy_cr": 9820.0,
+            "sell_cr": 9553.0,
+            "net_cr": 267.45,
+            "source": "demo_fixture",
+            "demo": True,
+        }
+    else:
+        unavailable_flow = {
+            "buy_cr": None,
+            "sell_cr": None,
+            "net_cr": None,
+            "status": "unavailable",
+            "source": "unavailable",
+            "as_of": None,
+            "reason": "No verified NSE FII/DII institutional flow feed configured.",
+        }
+        fii_activity = unavailable_flow
+        dii_activity = dict(unavailable_flow)
 
     return {
         "indices": indices,
-        "market_regime": regime,
-        "advance_decline": {"advances": 34, "declines": 16, "unchanged": 0},
-        "market_breadth": "positive",
-        "fii_activity": {"buy": 5240.50, "sell": 4320.10, "net": 920.40},
-        "dii_activity": {"buy": 3890.20, "sell": 3410.80, "net": 479.40},
+        "advance_decline": breadth,
+        "fii_activity": fii_activity,
+        "dii_activity": dii_activity,
+        "market_session": MarketHours.get_market_session(),
+        "is_market_open": MarketHours.is_market_open(),
+        "received_at": now_iso,
+        "demo_mode": settings.demo_mode,
+        "disclaimer": "Reference market data only. Not investment advice.",
     }
 
 
 @router.get("/gainers")
-def top_gainers():
-    """Get live top gaining stocks."""
-    stocks = fetch_live_stock_summaries()
-    sorted_stocks = sorted(stocks, key=lambda x: x["change_pct"], reverse=True)
-    return sorted_stocks[:5]
+async def top_gainers():
+    stocks = await asyncio.to_thread(_fetch_constituent_quotes_sync)
+    return sorted(stocks, key=lambda x: x.get("change_percent") or 0, reverse=True)[:5]
 
 
 @router.get("/losers")
-def top_losers():
-    """Get live top losing stocks."""
-    stocks = fetch_live_stock_summaries()
-    sorted_stocks = sorted(stocks, key=lambda x: x["change_pct"])
-    return sorted_stocks[:5]
+async def top_losers():
+    stocks = await asyncio.to_thread(_fetch_constituent_quotes_sync)
+    return sorted(stocks, key=lambda x: x.get("change_percent") or 0)[:5]
 
 
 @router.get("/sectors")
-def sector_performance():
-    """Get sector performance."""
-    return SECTORS
+async def sector_performance():
+    if settings.demo_mode:
+        return SECTORS
+    stocks = await asyncio.to_thread(_fetch_constituent_quotes_sync)
+    if not stocks:
+        return []
+    by_sector: Dict[str, List[float]] = {}
+    for s in stocks:
+        sec = s.get("sector") or "Other"
+        if s.get("change_percent") is not None:
+            by_sector.setdefault(sec, []).append(float(s["change_percent"]))
+    return [
+        {
+            "sector": sec,
+            "avg_change_percent": round(sum(vals) / len(vals), 2),
+            "constituents": len(vals),
+            "status": "ok",
+        }
+        for sec, vals in by_sector.items()
+    ]
 
 
 @router.get("/heatmap")
-def market_heatmap():
-    """Get live heatmap data grouped by sector."""
-    stocks = fetch_live_stock_summaries()
-    heatmap = {}
-    for s in stocks:
-        sec = s["sector"]
-        if sec not in heatmap:
-            heatmap[sec] = []
-        heatmap[sec].append({
+async def market_heatmap():
+    stocks = await asyncio.to_thread(_fetch_constituent_quotes_sync)
+    return [
+        {
             "symbol": s["symbol"],
             "name": s["name"],
+            "sector": s.get("sector", "Equity"),
+            "change": s.get("change_percent"),
             "price": s["price"],
-            "change_pct": s["change_pct"],
-            "market_cap": s.get("market_cap", "Live Market"),
-        })
-    return heatmap
+            "source": s.get("source"),
+            "as_of": s.get("as_of"),
+        }
+        for s in stocks
+    ]
 
 
 @router.get("/news")
-def market_news():
-    """Get latest market news."""
-    return DEMO_NEWS
+async def market_news():
+    if settings.demo_mode:
+        return [{"demo": True, **item} for item in DEMO_NEWS]
+    return []
