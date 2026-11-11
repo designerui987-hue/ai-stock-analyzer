@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { auth } from '@/lib/api';
 import Link from 'next/link';
 import { ShoppingBag, ArrowUpRight, ArrowDownRight, RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, ExternalLink } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
@@ -29,7 +30,7 @@ export default function OrdersPage() {
 
   const fetchOrders = () => {
     setLoading(true);
-    fetch('/api/broker/orders?userId=demo_user')
+    fetch('/api/broker/orders', { headers: auth.getAuthHeaders() })
       .then((res) => res.json())
       .then((json) => {
         if (json.success && json.orders) {

@@ -26,55 +26,48 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { FinancialChart } from '@/components/ui/FinancialChart';
+import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
 import { DEMO_STOCKS } from '@/lib/data';
+import { auth } from '@/lib/api';
 import { getOptionChainSummary } from '@/lib/optionChain';
 import { calculatePositionSize } from '@/lib/positionSizing';
-import {
-  extractXGBoostFactors,
-  extractLightGBMFactors,
-  extractNeuralNetFactors,
-  extractProphetFactors,
-  generateConsensusSummary,
-} from '@/lib/explainability/extractFactors';
-import { FactorItem, ModelVote } from '@/lib/explainability/factorMapping';
+import { generateConsensusSummary } from '@/lib/explainability/extractFactors';
+import { ModelVote } from '@/lib/explainability/factorMapping';
 
+/**
+ * Adapts backend AI analysis to the shape expected by the UI.
+ *
+ * IMPORTANT: prediction_models is NOT mapped — the backend no longer returns
+ * fake XGBoost/LightGBM/Neural Net/Prophet scores (removed per AGENTS.md).
+ * Rule-based factors from the deterministic engine are shown directly.
+ */
 function adaptBackendAIToFrontend(backendAI: any, technicals?: any) {
   if (!backendAI) return null;
 
-  // Adapt the prediction models format to the frontend's expected ModelVote format
-  const modelVotes: ModelVote[] = Object.entries(backendAI.prediction_models || {}).map(([name, data]: [string, any]) => {
-    return {
-      model_name: name as any,
-      vote: data.signal,
-      confidence_pct: Math.round(Math.abs(data.score) * 100) || backendAI.confidence,
-      top_factors: (backendAI.factors || []).map((f: string, i: number) => ({
-        factor_name: f,
-        feature: f,
-        weight_pct: Math.max(15, 40 - i * 8),
-        direction: data.signal === 'BUY' ? 'supports' : 'contradicts',
-        plain_language: f,
-      }))
-    };
-  });
-
-  const summary = generateConsensusSummary(modelVotes);
+  // RSI/MACD may be numbers OR {status:'unavailable'} objects from the backend
+  const rsiRaw = backendAI.rsi ?? technicals?.rsi;
+  const macdRaw = backendAI.macd ?? technicals?.macd;
+  const rsiDisplay: number | null = typeof rsiRaw === 'number' ? rsiRaw : null;
+  const macdDisplay: number | null = typeof macdRaw === 'number' ? macdRaw : null;
 
   return {
-    signal: backendAI.signal,
-    confidence: backendAI.confidence,
-    risk: backendAI.risk_score < 4 ? 'Low' : backendAI.risk_score < 7 ? 'Medium' : 'High',
-    riskScore: backendAI.risk_score,
-    entry: backendAI.entry_price,
-    target: backendAI.exit_price,
-    stopLoss: backendAI.stop_loss,
-    upside: backendAI.profit_probability,
-    profitProb: backendAI.profit_probability,
-    reasons: [backendAI.explanation, ...(backendAI.factors || [])],
-    pe: backendAI.pe_ratio || technicals?.pe || 26.8,
-    rsi: backendAI.rsi || technicals?.rsi || 58.4,
-    macd: backendAI.macd || technicals?.macd || 2.34,
-    model_votes: modelVotes,
-    consensus_summary: summary,
+    signal: (backendAI.signal ?? 'HOLD') as string,
+    confidence: (backendAI.confidence ?? 50) as number,
+    risk: ((backendAI.risk_score ?? 5) < 4 ? 'Low' : (backendAI.risk_score ?? 5) < 7 ? 'Medium' : 'High') as string,
+    riskScore: (backendAI.risk_score ?? 5) as number,
+    entry: (backendAI.entry_price ?? 0) as number,
+    target: (backendAI.exit_price ?? 0) as number,
+    stopLoss: (backendAI.stop_loss ?? 0) as number,
+    upside: (backendAI.profit_probability ?? 50) as number,
+    profitProb: (backendAI.profit_probability ?? 50) as number,
+    reasons: ([backendAI.explanation, ...(backendAI.factors || [])].filter(Boolean)) as string[],
+    pe: (typeof backendAI.pe_ratio === 'number' ? backendAI.pe_ratio : null) as number | null,
+    rsi: rsiDisplay,
+    macd: macdDisplay,
+    analysis_mode: (backendAI.analysis_mode ?? 'unknown') as string,
+    // No model_votes — fake XGBoost/LightGBM/Neural Net/Prophet breakdown removed
+    model_votes: [] as ModelVote[],
+    consensus_summary: null as string | null,
   };
 }
 
@@ -86,20 +79,38 @@ export default function StockAnalysisPage() {
   const [chartData, setChartData] = useState<any[]>([]);
 
   useEffect(() => {
+    let unsubscribeStream: (() => void) | undefined;
     import('@/lib/api').then(({ api }) => {
-      // Fetch Analysis from backend (includes AI-assisted quantitative analysis)
+      // Fetch Analysis from backend (includes unified market data + AI-assisted quant analysis)
       api.getStockAnalysis(symbol)
         .then(data => {
-            // Merge with the Next.js live quote data to satisfy the user's previous request
-            api.getQuoteData(symbol).then(liveQuote => {
-                setLiveStock({ ...data, live_quote: liveQuote });
-            }).catch(() => setLiveStock(data));
+          setLiveStock(data);
         })
         .catch(err => console.error(err));
         
       // Fetch Initial Chart Data
       fetchChartForRange('1M');
+
+      // Subscribe to real-time price stream via SSE
+      unsubscribeStream = api.subscribePriceStream([symbol], (event) => {
+        if (event?.quotes && Array.isArray(event.quotes)) {
+          const match = event.quotes.find((q: any) => q.symbol === symbol);
+          if (match && typeof match.price === 'number' && match.price > 0) {
+            setLiveStock((prev: any) => {
+              if (!prev) return { quote: match };
+              return {
+                ...prev,
+                quote: { ...(prev.quote || {}), ...match },
+              };
+            });
+          }
+        }
+      });
     });
+
+    return () => {
+      if (unsubscribeStream) unsubscribeStream();
+    };
   }, [symbol]);
 
   const fetchChartForRange = (range: string) => {
@@ -118,7 +129,19 @@ export default function StockAnalysisPage() {
     });
   };
 
-  const stock = liveStock?.live_quote ? { ...demoStock, price: liveStock.live_quote.price, change_pct: liveStock.live_quote.change_pct, name: liveStock.live_quote.name || demoStock.name, market_cap: liveStock.live_quote.market_cap || demoStock.market_cap } : demoStock;
+  // Prefer live quote from backend or Next.js route; fall back to demo fixture only when DEMO_MODE is true
+  const isDemoAllowed = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+  const resolvedQuote = liveStock?.quote?.price ? liveStock.quote : (liveStock?.live_quote?.price ? liveStock.live_quote : null);
+  const stock = resolvedQuote ? { ...demoStock, ...resolvedQuote } : (isDemoAllowed ? demoStock : { ...demoStock, price: 0, change_pct: 0, is_unavailable: true });
+
+  const riskData = liveStock?.risk;
+  const isRiskOk = riskData?.status === 'ok';
+  const betaVal = typeof riskData?.beta === 'number' ? riskData.beta.toFixed(2) : (riskData?.beta?.status === 'unavailable' ? 'Unavailable' : '—');
+  const volVal = typeof riskData?.volatility_pct === 'number' ? `${riskData.volatility_pct.toFixed(1)}%` : (riskData?.volatility_pct?.status === 'unavailable' ? 'Unavailable' : '—');
+  const ddVal = typeof riskData?.max_drawdown_pct === 'number' ? `${riskData.max_drawdown_pct.toFixed(1)}%` : (riskData?.max_drawdown_pct?.status === 'unavailable' ? 'Unavailable' : '—');
+  const sharpeVal = typeof riskData?.sharpe_ratio === 'number' ? riskData.sharpe_ratio.toFixed(2) : (riskData?.sharpe_ratio?.status === 'unavailable' ? 'Unavailable' : '—');
+  const riskSource = riskData?.source || 'yfinance/^NSEI';
+  const riskAsOf = riskData?.as_of ? new Date(riskData.as_of).toLocaleDateString('en-IN') : null;
   const ai = (liveStock?.ai_analysis ? adaptBackendAIToFrontend(liveStock.ai_analysis, liveStock.technical) : null) || adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading AI Data...', factors: [], prediction_models: {} })!;
   
   const isUp = stock.change_pct >= 0;
@@ -155,9 +178,11 @@ export default function StockAnalysisPage() {
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
   const [orderSuccessMsg, setOrderSuccessMsg] = useState<string | null>(null);
+  const [orderMode, setOrderMode] = useState<'PAPER' | 'LIVE'>('PAPER');
+  const [liveOptIn, setLiveOptIn] = useState(false);
 
   useEffect(() => {
-    fetch('/api/broker/connection?userId=demo_user')
+    fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
       .then((res) => res.json())
       .then((json) => {
         if (json.success && json.connected) {
@@ -175,18 +200,18 @@ export default function StockAnalysisPage() {
     try {
       const res = await fetch('/api/broker/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: auth.getAuthHeaders(),
         body: JSON.stringify({
-          userId: 'demo_user',
           symbol: stock.symbol,
           transaction_type: ai.signal === 'BUY' ? 'BUY' : 'SELL',
           quantity: sizingResult.position_size_shares,
           order_type: orderType,
           product_type: orderProductType,
-          price: ai.entry,
           stop_loss_price: ai.stopLoss,
           target_price: ai.target,
           user_confirmed: true,
+          mode: orderMode,
+          live_trading_opt_in: orderMode === 'LIVE' ? liveOptIn : false,
         }),
       });
 
@@ -194,7 +219,10 @@ export default function StockAnalysisPage() {
       if (!data.success) {
         setOrderError(data.error || 'Order placement failed');
       } else {
-        setOrderSuccessMsg(`✅ Order #${data.order.broker_order_id} placed successfully with Zerodha Kite!`);
+        const msg = data.mode === 'PAPER'
+          ? `📝 Paper Order #${data.order.broker_order_id} executed at ₹${data.order.price} (Simulation)`
+          : `✅ Live Order #${data.order.broker_order_id} placed successfully with Zerodha Kite!`;
+        setOrderSuccessMsg(msg);
         setTimeout(() => {
           setIsOrderModalOpen(false);
           setOrderSuccessMsg(null);
@@ -223,9 +251,12 @@ export default function StockAnalysisPage() {
             <Badge variant={ai.signal.toLowerCase() as any} size="md">
               AI {ai.signal}
             </Badge>
-            <span className="text-caption text-slate-500 font-medium bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
-              NSE Live
-            </span>
+            <FreshnessBadge
+              status={stock.freshness || (stock.is_unavailable ? 'UNAVAILABLE' : 'DELAYED (15m)')}
+              asOf={stock.as_of}
+              source={stock.source}
+              showDetails={true}
+            />
           </div>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             {stock.name} · {stock.sector} · Market Cap: {stock.market_cap}
@@ -302,7 +333,7 @@ export default function StockAnalysisPage() {
                 Technical Price Structure & Moving Averages
               </h3>
               <Badge variant="indigo" size="sm">
-                RSI: {ai.rsi} (Neutral-Bullish)
+                RSI: {ai.rsi !== null ? `${ai.rsi}` : 'N/A'} (yfinance)
               </Badge>
             </div>
 
@@ -314,35 +345,86 @@ export default function StockAnalysisPage() {
             <Card>
               <span className="text-caption text-slate-500 font-medium">P/E Ratio</span>
               <p className="text-h3 font-semibold text-slate-900 dark:text-slate-100 mt-2">
-                {ai.pe}x
+                {ai.pe !== null ? `${ai.pe}x` : <span className="text-xs text-slate-400">N/A</span>}
               </p>
-              <span className="text-caption text-slate-400">Sector Avg: 28.2x</span>
+              <span className="text-caption text-slate-400">Trailing P/E · yfinance</span>
             </Card>
 
             <Card>
               <span className="text-caption text-slate-500 font-medium">RSI (14-Day)</span>
               <p className="text-h3 font-semibold text-slate-900 dark:text-slate-100 mt-2">
-                {ai.rsi}
+                {ai.rsi !== null ? ai.rsi : <span className="text-xs text-slate-400">N/A</span>}
               </p>
-              <span className="text-caption text-emerald-500">Bullish Zone</span>
+              <span className="text-caption text-slate-400">Source: yfinance</span>
             </Card>
 
             <Card>
               <span className="text-caption text-slate-500 font-medium">MACD (12, 26)</span>
               <p className="text-h3 font-semibold text-emerald-600 dark:text-emerald-400 mt-2">
-                +{ai.macd}
+                {ai.macd !== null ? (ai.macd >= 0 ? `+${ai.macd}` : `${ai.macd}`) : <span className="text-xs text-slate-400">N/A</span>}
               </p>
-              <span className="text-caption text-slate-400">Positive Crossover</span>
+              <span className="text-caption text-slate-400">Source: yfinance</span>
             </Card>
 
             <Card>
-              <span className="text-caption text-slate-500 font-medium">Historical Accuracy</span>
-              <p className="text-h3 font-semibold text-indigo-600 dark:text-indigo-400 mt-2">
-                76.4%
+              <span className="text-caption text-slate-500 font-medium">Analysis Mode</span>
+              <p className="text-h3 font-semibold text-indigo-600 dark:text-indigo-400 mt-2 text-xs leading-tight">
+                {ai.analysis_mode === 'deterministic_rule_based' ? 'Rule-Based' : (ai.analysis_mode ?? 'Unknown')}
               </p>
-              <span className="text-caption text-slate-400">90-Day Backtest</span>
+              <span className="text-caption text-slate-400">Not investment advice</span>
             </Card>
           </div>
+
+          {/* Institutional Risk Metrics (Real Beta, Volatility, Max DD, Sharpe vs ^NSEI) */}
+          <Card size="large" className="space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Institutional Risk Metrics (1Y vs ^NSEI)
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Source: {riskSource} {riskAsOf ? `· As of ${riskAsOf}` : ''} · Not investment advice
+                </p>
+              </div>
+              <Badge variant={isRiskOk ? 'indigo' : 'amber'} size="sm">
+                {isRiskOk ? 'Live 1Y Quant' : (riskData?.status === 'unavailable' ? 'Unavailable' : 'Calculating...')}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">Beta vs ^NSEI</span>
+                <p className="text-h3 font-semibold text-slate-900 dark:text-slate-100 mt-1">
+                  {betaVal}
+                </p>
+                <span className="text-[10px] text-slate-400">Covariance / NSEI var</span>
+              </div>
+
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">Annualised Volatility</span>
+                <p className="text-h3 font-semibold text-slate-900 dark:text-slate-100 mt-1">
+                  {volVal}
+                </p>
+                <span className="text-[10px] text-slate-400">252-day daily StDev</span>
+              </div>
+
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">Max Drawdown</span>
+                <p className="text-h3 font-semibold text-red-600 dark:text-red-400 mt-1">
+                  {ddVal}
+                </p>
+                <span className="text-[10px] text-slate-400">Peak-to-Trough 1Y</span>
+              </div>
+
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">Sharpe Ratio</span>
+                <p className="text-h3 font-semibold text-indigo-600 dark:text-indigo-400 mt-1">
+                  {sharpeVal}
+                </p>
+                <span className="text-[10px] text-slate-400">Annualised (Rf = 6.5%)</span>
+              </div>
+            </div>
+          </Card>
         </div>
 
         {/* Right Column: AI Decision Panel & Action Plan */}
@@ -385,6 +467,11 @@ export default function StockAnalysisPage() {
                   {ai.risk} ({ai.riskScore}/10)
                 </p>
               </div>
+            </div>
+
+            {/* Disclaimer per AGENTS.md Rule 7 */}
+            <div className="text-[11px] text-amber-600/90 dark:text-amber-400/90 bg-amber-500/10 border border-amber-500/20 rounded p-2 text-center">
+              ⚠️ Not investment advice. Real-time data from {stock.source || 'exchange'} as of {stock.as_of ? new Date(stock.as_of).toLocaleTimeString('en-IN') : 'market hours'}.
             </div>
 
             {/* Action Plan Grid */}
@@ -613,6 +700,62 @@ export default function StockAnalysisPage() {
                     </div>
                   </div>
 
+                  {/* Execution Mode Selector (Paper vs Live) */}
+                  <div className="space-y-2">
+                    <label className="text-slate-500 font-medium block text-xs">
+                      Trading Mode:
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setOrderMode('PAPER'); setLiveOptIn(false); }}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          orderMode === 'PAPER'
+                            ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 ring-1 ring-indigo-600'
+                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs">📝 Paper Trading</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-medium">Default</span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Real-time simulation, zero financial risk</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setOrderMode('LIVE')}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          orderMode === 'LIVE'
+                            ? 'border-amber-600 bg-amber-50/60 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-1 ring-amber-600'
+                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs">⚡ Live Kite Trading</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 font-medium">Opt-in</span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Routes to Zerodha Kite with real capital</p>
+                      </button>
+                    </div>
+
+                    {orderMode === 'LIVE' && (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2">
+                        <label className="flex items-start space-x-2 cursor-pointer text-xs text-amber-900 dark:text-amber-200">
+                          <input
+                            type="checkbox"
+                            checked={liveOptIn}
+                            onChange={(e) => setLiveOptIn(e.target.checked)}
+                            className="mt-0.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                          />
+                          <span className="font-medium text-[11px] leading-tight">
+                            I explicitly opt in to Live Trading. I understand real market orders will be submitted to Zerodha Kite and capital will be at risk.
+                          </span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Product & Order Type Selectors */}
                   <div className="grid grid-cols-2 gap-4 text-xs">
                     <div>
@@ -680,10 +823,14 @@ export default function StockAnalysisPage() {
                       variant="primary"
                       size="md"
                       onClick={handleExecuteOrder}
-                      disabled={orderSubmitting}
+                      disabled={orderSubmitting || (orderMode === 'LIVE' && !liveOptIn)}
                       className={ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700'}
                     >
-                      {orderSubmitting ? 'Submitting to Kite...' : `Confirm & Place ${ai.signal} Order`}
+                      {orderSubmitting
+                        ? 'Executing Order...'
+                        : orderMode === 'PAPER'
+                        ? `Confirm & Place Paper ${ai.signal}`
+                        : `Confirm & Place Live Kite ${ai.signal}`}
                     </Button>
                   </div>
                 </div>
@@ -706,101 +853,31 @@ export default function StockAnalysisPage() {
             </div>
           </Card>
 
-          {/* Model Breakdown & Explainability Panel */}
-          <Card className="space-y-5 border-indigo-500/30">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
-              <div className="flex items-center space-x-2">
+          {/* Rule-based analysis factors (AI model breakdown removed — no trained ML models exist) */}
+          {ai.reasons.length > 1 && (
+            <Card className="space-y-4 border-indigo-500/30">
+              <div className="flex items-center space-x-2 border-b border-slate-100 dark:border-white/[0.06] pb-3">
                 <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Model Consensus Explainability
+                  Quantitative Analysis Factors
                 </h3>
+                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium bg-amber-500/10 px-2 py-0.5 rounded">
+                  Rule-based · {ai.analysis_mode === 'deterministic_rule_based' ? 'No AI model' : ai.analysis_mode}
+                </span>
               </div>
-              <span className="text-[10px] text-slate-400 font-medium">Click to inspect factors</span>
-            </div>
-
-            {/* Synthesized Rule-Based Consensus Summary Banner */}
-            <div className="p-3 rounded bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed font-medium">
-              💡 {ai.consensus_summary}
-            </div>
-
-            {/* Expandable Model Cards */}
-            <div className="space-y-3">
-              {ai.model_votes.map((m: ModelVote) => {
-                const isExpanded = expandedModels.has(m.model_name);
-
-                return (
-                  <div
-                    key={m.model_name}
-                    className="rounded-btn border border-slate-200 dark:border-white/[0.06] bg-slate-50/50 dark:bg-slate-900/60 overflow-hidden transition-colors"
-                  >
-                    <div
-                      onClick={() => toggleModelExpand(m.model_name)}
-                      className="p-3 flex items-center justify-between cursor-pointer hover:bg-slate-100/60 dark:hover:bg-white/[0.02]"
-                    >
-                      <div className="flex items-center space-x-2.5">
-                        <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                          {m.model_name}
-                        </span>
-                        <Badge variant={m.vote.toLowerCase() as any} size="sm">
-                          {m.vote}
-                        </Badge>
-                        {m.disagreement_flag && (
-                          <Badge variant="amber" size="sm">
-                            Diverges from consensus
-                          </Badge>
-                        )}
-                      </div>
-
-                      <div className="flex items-center space-x-3 text-xs">
-                        <span className="text-slate-500 font-mono">{m.confidence_pct}% Conf</span>
-                        {isExpanded ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
-                      </div>
-                    </div>
-
-                    {/* Expanded Factors Panel */}
-                    {isExpanded && (
-                      <div className="px-3 pb-3 pt-1 border-t border-slate-200/60 dark:border-white/[0.04] bg-white dark:bg-slate-900/90 space-y-2.5">
-                        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
-                          Top Factors Driving Prediction ({m.model_name === 'NeuralNet' ? 'Occlusion Proxy' : m.model_name === 'Prophet' ? 'Decomposition' : 'Feature Importance'})
-                        </span>
-
-                        <div className="space-y-2">
-                          {m.top_factors.map((f, idx) => (
-                            <div key={idx} className="space-y-1">
-                              <div className="flex items-center justify-between text-xs">
-                                <div className="flex items-center space-x-1.5 font-medium">
-                                  {f.direction === 'supports' ? (
-                                    <span className="text-emerald-500 font-bold text-sm">↑</span>
-                                  ) : (
-                                    <span className="text-red-500 font-bold text-sm">↓</span>
-                                  )}
-                                  <span className="text-slate-800 dark:text-slate-200">{f.factor_name}</span>
-                                </div>
-                                <span className="font-mono text-[11px] text-slate-500">{f.weight_pct}% weight</span>
-                              </div>
-
-                              <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${
-                                    f.direction === 'supports' ? 'bg-emerald-500' : 'bg-red-500'
-                                  }`}
-                                  style={{ width: `${f.weight_pct}%` }}
-                                />
-                              </div>
-
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight">
-                                {f.plain_language}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+              <div className="space-y-2">
+                {ai.reasons.map((reason: string, i: number) => (
+                  <div key={i} className="flex items-start space-x-2 text-xs text-slate-700 dark:text-slate-300">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500 shrink-0 mt-0.5" />
+                    <span>{reason}</span>
                   </div>
-                );
-              })}
-            </div>
-          </Card>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-400 pt-1 border-t border-slate-200 dark:border-white/[0.04]">
+                ⚠️ Not investment advice. Set NVIDIA_API_KEY for full LLM-assisted analysis.
+              </p>
+            </Card>
+          )}
         </div>
       </div>
     </div>

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint"
   },
@@ -21,6 +21,7 @@
     "react-dom": "^18.2.0",
     "recharts": "^2.10.3",
     "yahoo-finance2": "^2.11.0",
+    "zod": "^4.6.7",
     "zustand": "^4.4.7"
   },
   "devDependencies": {

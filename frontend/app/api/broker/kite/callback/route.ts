@@ -1,25 +1,38 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/security/crypto';
+import { getVerifiedUserId } from '@/lib/auth/session';
+import crypto from 'node:crypto';
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const requestToken = searchParams.get('request_token');
-    const userId = searchParams.get('userId') || 'demo_user';
+    const stateUserId = searchParams.get('state');
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
     if (!requestToken) {
       return NextResponse.redirect(`${baseUrl}/settings?broker_error=Missing+request_token`);
     }
 
+    // Determine authenticated user: prefer verified session header/cookie, fallback to state passed during login
+    let userId: string;
+    try {
+      userId = getVerifiedUserId(req);
+    } catch {
+      if (stateUserId && stateUserId.trim()) {
+        userId = stateUserId.trim();
+      } else {
+        return NextResponse.redirect(`${baseUrl}/settings?broker_error=Unauthenticated+broker+callback`);
+      }
+    }
+
     const apiKey = process.env.KITE_API_KEY;
     const apiSecret = process.env.KITE_API_SECRET;
-    let accessToken = `sess_kite_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    let accessToken = `sess_kite_${Date.now()}_${crypto.randomUUID().replace(/-/g, '').substring(0, 9)}`;
 
     if (apiKey && apiSecret) {
       // Exchange request_token server-side using SHA-256(api_key + request_token + api_secret)
-      const crypto = await import('node:crypto');
       const checksum = crypto
         .createHash('sha256')
         .update(apiKey + requestToken + apiSecret)
@@ -44,6 +57,8 @@ export async function GET(req: Request) {
       } else {
         return NextResponse.redirect(`${baseUrl}/settings?broker_error=${encodeURIComponent(data.message || 'Token exchange failed')}`);
       }
+    } else if (process.env.KITE_SANDBOX !== 'true') {
+      return NextResponse.redirect(`${baseUrl}/settings?broker_error=${encodeURIComponent('Kite API keys not configured and KITE_SANDBOX is false')}`);
     }
 
     // Encrypt token at rest

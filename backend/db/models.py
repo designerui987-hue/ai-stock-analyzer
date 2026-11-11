@@ -1,10 +1,13 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Enum, UniqueConstraint
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
+from sqlalchemy.orm import relationship, declarative_base
+from datetime import datetime, timezone
 import enum
 
 Base = declarative_base()
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
 
 
 class AlertType(str, enum.Enum):
@@ -24,7 +27,7 @@ class User(Base):
     username = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     portfolios = relationship("Portfolio", back_populates="user", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="user", cascade="all, delete-orphan")
@@ -38,8 +41,8 @@ class Portfolio(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
     name = Column(String, nullable=False, default="My Portfolio")
     description = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="portfolios")
     holdings = relationship("Holding", back_populates="portfolio", cascade="all, delete-orphan")
@@ -55,8 +58,8 @@ class Holding(Base):
     avg_price = Column(Float, nullable=False)
     current_price = Column(Float, nullable=True)
     invested = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     portfolio = relationship("Portfolio", back_populates="holdings")
 
@@ -71,7 +74,7 @@ class Alert(Base):
     price_target = Column(Float, nullable=True)
     is_active = Column(Boolean, default=True)
     is_triggered = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     triggered_at = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="alerts")
@@ -84,7 +87,7 @@ class WatchlistItem(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
     symbol = Column(String, index=True, nullable=False)
     notes = Column(String, nullable=True)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=utcnow)
 
     user = relationship("User", back_populates="watchlist")
 

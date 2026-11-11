@@ -15,6 +15,7 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { FinancialChart } from '@/components/ui/FinancialChart';
+import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
 import { Sparkline } from '@/components/ui/Sparkline';
 import {
   DEMO_INDICES,
@@ -40,6 +41,7 @@ export default function DashboardPage() {
   const [liveLosers, setLiveLosers] = React.useState<any[]>([]);
 
   React.useEffect(() => {
+    let unsubscribeStream: (() => void) | undefined;
     import('@/lib/api').then(({ api }) => {
       api.getMarketOverview()
         .then(data => {
@@ -60,7 +62,21 @@ export default function DashboardPage() {
           if (Array.isArray(data) && data.length > 0) setLiveLosers(data);
         })
         .catch(err => console.error(err));
+
+      // Subscribe to real-time stream for prominent watchlist symbols
+      unsubscribeStream = api.subscribePriceStream(
+        ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK'],
+        (event) => {
+          if (event?.quotes && Array.isArray(event.quotes)) {
+            // Live quotes stream received
+          }
+        }
+      );
     });
+
+    return () => {
+      if (unsubscribeStream) unsubscribeStream();
+    };
   }, []);
 
   const pnlPositive = DEMO_PORTFOLIO.total_pnl >= 0;
@@ -253,9 +269,12 @@ export default function DashboardPage() {
                 AI Signals
               </h3>
             </div>
-            <Badge variant="indigo" size="sm">
-              Live Ensemble
-            </Badge>
+            <div className="flex items-center space-x-2">
+              <FreshnessBadge status="DELAYED (15m)" />
+              <Badge variant="indigo" size="sm">
+                Rule Engine
+              </Badge>
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -410,6 +429,11 @@ export default function DashboardPage() {
             ))}
           </div>
         </Card>
+      </div>
+
+      {/* Global Regulatory Disclaimer per AGENTS.md Rule 7 */}
+      <div className="text-center text-[11px] text-slate-500 dark:text-slate-400 py-3 border-t border-slate-200 dark:border-white/[0.06]">
+        Market quotes delayed by 15m (yfinance) unless Kite real-time ticker connected. Not investment advice.
       </div>
     </div>
   );

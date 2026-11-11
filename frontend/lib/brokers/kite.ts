@@ -5,8 +5,10 @@
  * - KITE_API_KEY      : Zerodha Developer API Key
  * - KITE_API_SECRET   : Zerodha Developer API Secret
  * - KITE_REDIRECT_URL : OAuth Callback URL (default: http://localhost:3000/api/broker/kite/callback)
+ * - KITE_SANDBOX      : Set to "true" to allow dev simulation mode without real Kite API credentials
  */
 
+import crypto from 'node:crypto';
 import type {
   BrokerAdapter,
   BrokerType,
@@ -22,7 +24,7 @@ export class KiteBrokerAdapter implements BrokerAdapter {
   brokerName: BrokerType = 'KITE';
 
   private apiKey = process.env.KITE_API_KEY;
-  private apiSecret = process.env.KITE_API_SECRET;
+  private isSandbox = process.env.KITE_SANDBOX === 'true';
 
   async placeOrder(accessToken: string, params: OrderParams): Promise<OrderResponse> {
     if (!accessToken) {
@@ -30,15 +32,23 @@ export class KiteBrokerAdapter implements BrokerAdapter {
     }
 
     if (!this.apiKey) {
-      // Dev mode sandbox execution simulation
-      const mockOrderId = `24072700${Math.floor(100000 + Math.random() * 900000)}`;
+      if (!this.isSandbox) {
+        return {
+          success: false,
+          status: 'REJECTED',
+          message: 'Kite Connect API key not configured and KITE_SANDBOX is not enabled.',
+        };
+      }
+
+      // Explicit KITE_SANDBOX mode: generate deterministic UUID-based mock order ID (no Math.random)
+      const mockOrderId = `240727${crypto.randomUUID().replace(/\D/g, '').slice(0, 8)}`;
       console.log(`[Kite Sandbox Order] ${params.transaction_type} ${params.quantity}x ${params.symbol} @ ₹${params.price || 'MKT'} (${params.product_type})`);
       
       return {
         success: true,
         broker_order_id: mockOrderId,
         status: 'COMPLETE',
-        message: 'Order executed successfully via Zerodha Kite Connect.',
+        message: 'Order executed successfully via Zerodha Kite Connect (Sandbox).',
         raw_response: { order_id: mockOrderId, status: 'COMPLETE', exchange_order_id: `NSE_${mockOrderId}` },
       };
     }
@@ -94,7 +104,10 @@ export class KiteBrokerAdapter implements BrokerAdapter {
   }
 
   async getOrderStatus(accessToken: string, orderId: string): Promise<OrderStatus> {
-    if (!this.apiKey) return 'COMPLETE';
+    if (!this.apiKey) {
+      if (this.isSandbox) return 'COMPLETE';
+      return 'REJECTED';
+    }
 
     try {
       const res = await fetch(`https://api.kite.trade/orders/${orderId}`, {
@@ -118,10 +131,13 @@ export class KiteBrokerAdapter implements BrokerAdapter {
 
   async getPositions(accessToken: string): Promise<PositionItem[]> {
     if (!this.apiKey) {
-      return [
-        { symbol: 'RELIANCE', quantity: 50, average_price: 2410, last_price: 2450, pnl: 2000, product: 'CNC' },
-        { symbol: 'TCS', quantity: 25, average_price: 3820, last_price: 3800, pnl: -500, product: 'CNC' },
-      ];
+      if (this.isSandbox) {
+        return [
+          { symbol: 'RELIANCE', quantity: 50, average_price: 2410, last_price: 2450, pnl: 2000, product: 'CNC' },
+          { symbol: 'TCS', quantity: 25, average_price: 3820, last_price: 3800, pnl: -500, product: 'CNC' },
+        ];
+      }
+      return [];
     }
 
     try {
@@ -150,11 +166,14 @@ export class KiteBrokerAdapter implements BrokerAdapter {
 
   async getFunds(accessToken: string): Promise<MarginBalance> {
     if (!this.apiKey) {
-      return {
-        available_cash: 850000,
-        used_margin: 333500,
-        total_collateral: 1183500,
-      };
+      if (this.isSandbox) {
+        return {
+          available_cash: 850000,
+          used_margin: 333500,
+          total_collateral: 1183500,
+        };
+      }
+      throw new Error('Kite API key not configured and KITE_SANDBOX is not enabled.');
     }
 
     try {
@@ -165,22 +184,25 @@ export class KiteBrokerAdapter implements BrokerAdapter {
         },
       });
       const data = await res.json();
-      if (data.status === 'success' && data.data.equity) {
+      if (data.status === 'success' && data.data && data.data.equity) {
         const eq = data.data.equity;
         return {
-          available_cash: eq.available.live_balance,
-          used_margin: eq.utilised.debits,
-          total_collateral: eq.net,
+          available_cash: Number(eq.available?.live_balance ?? 0),
+          used_margin: Number(eq.utilised?.debits ?? 0),
+          total_collateral: Number(eq.net ?? 0),
         };
       }
-      return { available_cash: 500000, used_margin: 0, total_collateral: 500000 };
-    } catch (e) {
-      return { available_cash: 500000, used_margin: 0, total_collateral: 500000 };
+      return { available_cash: 0, used_margin: 0, total_collateral: 0 };
+    } catch (e: any) {
+      console.error('[Kite getFunds error]', e);
+      throw new Error(`Failed to fetch live margin from Kite API: ${e.message}`);
     }
   }
 
   async cancelOrder(accessToken: string, orderId: string): Promise<boolean> {
-    if (!this.apiKey) return true;
+    if (!this.apiKey) {
+      return this.isSandbox;
+    }
     try {
       const res = await fetch(`https://api.kite.trade/orders/regular/${orderId}`, {
         method: 'DELETE',

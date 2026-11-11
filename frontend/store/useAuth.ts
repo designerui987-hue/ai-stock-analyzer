@@ -20,15 +20,10 @@ interface AuthState {
 
 export const useAuth = create<AuthState>()(
   persist(
-    (set, get) => ({
-      // Set to true by default to bypass login screen requirement for now
-      isLoggedIn: true,
-      user: {
-        id: 'usr-demo',
-        email: 'investor@stockai.com',
-        username: 'Investor',
-      },
-      token: 'demo-token',
+    (set) => ({
+      isLoggedIn: false,
+      user: null,
+      token: null,
 
       login: async (email: string, password: string) => {
         try {
@@ -39,36 +34,45 @@ export const useAuth = create<AuthState>()(
               isLoggedIn: true,
               token: response.access_token,
               user: {
-                id: payload.sub,
+                id: String(payload.sub),
                 email: email,
                 username: email.split('@')[0],
               },
             });
             return true;
           }
-          set({
-            isLoggedIn: true,
-            token: 'demo-token',
-            user: { id: 'usr-1', email, username: email.split('@')[0] },
-          });
-          return true;
+          set({ isLoggedIn: false, user: null, token: null });
+          return false;
         } catch (error) {
-          set({
-            isLoggedIn: true,
-            token: 'demo-token',
-            user: { id: 'usr-1', email, username: email.split('@')[0] },
-          });
-          return true;
+          console.error('[useAuth] Login failed:', error);
+          set({ isLoggedIn: false, user: null, token: null });
+          return false;
         }
       },
 
       register: async (email: string, username: string, password: string) => {
-        set({
-          isLoggedIn: true,
-          token: 'demo-token',
-          user: { id: 'usr-new', email, username },
-        });
-        return true;
+        try {
+          const response = await authAPI.register(email, username, password);
+          if (response?.access_token) {
+            const payload = JSON.parse(atob(response.access_token.split('.')[1]));
+            set({
+              isLoggedIn: true,
+              token: response.access_token,
+              user: {
+                id: String(payload.sub),
+                email: email,
+                username: username,
+              },
+            });
+            return true;
+          }
+          set({ isLoggedIn: false, user: null, token: null });
+          return false;
+        } catch (error) {
+          console.error('[useAuth] Registration failed:', error);
+          set({ isLoggedIn: false, user: null, token: null });
+          return false;
+        }
       },
 
       logout: () => {

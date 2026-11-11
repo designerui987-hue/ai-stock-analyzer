@@ -21,6 +21,13 @@ export const auth = {
     }
   },
 
+  getAuthHeaders: (): Record<string, string> => {
+    const token = auth.getToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return headers;
+  },
+
   isAuthenticated: () => {
     const token = auth.getToken();
     if (!token) return false;
@@ -136,21 +143,45 @@ export const api = {
   getHeatmap: () => fetchAPI('/api/market/heatmap'),
   getNews: () => fetchAPI('/api/market/news'),
 
-  // Stocks
+  // Stocks (Unified backend data layer as single source of truth)
   searchStocks: (q: string) => fetchAPI(`/api/stocks/search?q=${q}`),
   listStocks: () => fetchAPI('/api/stocks/list'),
   getStockAnalysis: (symbol: string) => fetchAPI(`/api/stocks/${symbol}`),
-  getChartData: async (symbol: string, period: string = '1Y') => {
-    const res = await fetch(`/live/stocks/${symbol}/chart?period=${period}`);
-    if (!res.ok) throw new Error('Failed to fetch live chart data');
-    return res.json();
-  },
-  getQuoteData: async (symbol: string) => {
-    const res = await fetch(`/live/stocks/${symbol}/quote`);
-    if (!res.ok) throw new Error('Failed to fetch live quote data');
-    return res.json();
-  },
+  getChartData: (symbol: string, period: string = '1Y') =>
+    fetchAPI(`/api/stocks/${symbol}/chart?period=${period}`),
+  getQuoteData: (symbol: string) =>
+    fetchAPI(`/api/stocks/quote/${symbol}`),
   getAIPicks: () => fetchAPI('/api/stocks/RELIANCE/ai-picks'),
+
+  // Server-Sent Events (SSE) price stream for watchlist / live tickers
+  subscribePriceStream: (
+    symbols: string[],
+    onMessage: (data: any) => void,
+    onError?: (err: any) => void
+  ) => {
+    if (typeof window === 'undefined') return () => {};
+    const token = auth.getToken() || '';
+    const symParam = encodeURIComponent(symbols.join(','));
+    const url = `${API_BASE}/api/stocks/stream?symbols=${symParam}&token=${encodeURIComponent(token)}`;
+    const eventSource = new EventSource(url);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        onMessage(payload);
+      } catch (e) {
+        console.warn('Failed to parse SSE price stream event:', e);
+      }
+    };
+
+    if (onError) {
+      eventSource.onerror = onError;
+    }
+
+    return () => {
+      eventSource.close();
+    };
+  },
 
   // Portfolio
   getPortfolio: () => fetchAPI('/api/portfolio/'),

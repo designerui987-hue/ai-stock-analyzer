@@ -177,21 +177,27 @@ class PredictionEngine:
             return self._fallback_technicals(price)
 
     def _fallback_technicals(self, price: float) -> dict:
-        """Return deterministic placeholder technicals when live data is unavailable."""
+        """
+        Return an explicit unavailable state for each technical indicator.
+        Called only when yfinance data is insufficient (< 20 bars).
+        Never returns invented constant values as if they were real.
+        """
+        reason = "Insufficient price history from yfinance (< 20 bars)"
+        unavail = {"status": "unavailable", "reason": reason}
         return {
-            "rsi": 55.0,
-            "macd": 1.5,
-            "macd_signal": 1.0,
-            "macd_hist": 0.5,
-            "sma_20": round(price * 0.99, 2),
-            "sma_50": round(price * 0.97, 2),
-            "sma_200": round(price * 0.93, 2),
-            "bollinger_upper": round(price * 1.04, 2),
-            "bollinger_lower": round(price * 0.96, 2),
-            "atr": round(price * 0.025, 2),
-            "vol_surge": 1.15,
-            "return_1m": 2.5,
-            "return_3m": 6.8,
+            "rsi": unavail,
+            "macd": unavail,
+            "macd_signal": unavail,
+            "macd_hist": unavail,
+            "sma_20": unavail,
+            "sma_50": unavail,
+            "sma_200": unavail,
+            "bollinger_upper": unavail,
+            "bollinger_lower": unavail,
+            "atr": unavail,
+            "vol_surge": unavail,
+            "return_1m": unavail,
+            "return_3m": unavail,
         }
 
     # ------------------------------------------------------------------
@@ -304,22 +310,39 @@ class PredictionEngine:
         """
         Rule-based deterministic prediction used when NVIDIA is unavailable.
         Uses the pre-computed technical indicators from the quant engine.
+        Safely handles indicators that may be in an unavailable state.
         """
         price = stock.get("price", 1000)
-        rsi = technicals.get("rsi", 55.0)
-        macd = technicals.get("macd", 0.0)
-        macd_hist = technicals.get("macd_hist", 0.0)
-        vol_surge = technicals.get("vol_surge", 1.0)
+        if isinstance(price, dict):
+            price = 1000.0
 
-        # Simple rule-based consensus
-        bull_signals = sum([
-            rsi > 50,
-            macd > 0,
-            macd_hist > 0,
-            vol_surge > 1.2,
-            price > technicals.get("sma_20", price),
-        ])
-        bear_signals = 5 - bull_signals
+        # Extract numeric indicators safely
+        def _get_num(key, default=None):
+            val = technicals.get(key)
+            return val if isinstance(val, (int, float)) else default
+
+        rsi = _get_num("rsi")
+        macd = _get_num("macd")
+        macd_hist = _get_num("macd_hist")
+        vol_surge = _get_num("vol_surge")
+        sma_20 = _get_num("sma_20")
+
+        # Consensus rules (only test available metrics)
+        signals = []
+        if rsi is not None:
+            signals.append(rsi > 50)
+        if macd is not None:
+            signals.append(macd > 0)
+        if macd_hist is not None:
+            signals.append(macd_hist > 0)
+        if vol_surge is not None:
+            signals.append(vol_surge > 1.2)
+        if sma_20 is not None and price is not None:
+            signals.append(price > sma_20)
+
+        total_signals = len(signals)
+        bull_signals = sum(signals)
+        bear_signals = total_signals - bull_signals
 
         if bull_signals >= 4:
             signal = "BUY"
@@ -328,7 +351,8 @@ class PredictionEngine:
         else:
             signal = "HOLD"
 
-        atr = technicals.get("atr", price * 0.025)
+        atr_val = technicals.get("atr")
+        atr = atr_val if isinstance(atr_val, (int, float)) else (price * 0.025)
         if signal == "BUY":
             entry_price = round(price, 2)
             stop_loss = round(price - 1.5 * atr, 2)
@@ -353,25 +377,24 @@ class PredictionEngine:
             "stop_loss": stop_loss,
             "profit_probability": round(50 + bull_signals * 5.0, 1),
             "explanation": (
-                "AI-assisted quantitative analysis (deterministic mode). "
+                "Rule-based quantitative analysis (deterministic mode — no AI model). "
                 f"Technical consensus: {bull_signals}/5 bullish signals. "
-                "Connect NVIDIA_API_KEY for full AI analysis."
+                "Connect NVIDIA_API_KEY for full LLM-assisted analysis."
             ),
             "factors": [
-                f"RSI {'above' if rsi > 50 else 'below'} 50 ({rsi:.1f})",
-                f"MACD histogram {'positive' if macd_hist > 0 else 'negative'} ({macd_hist:.4f})",
-                f"Volume surge {vol_surge:.2f}x 20-day average",
-                f"Price {'above' if price > technicals.get('sma_20', price) else 'below'} SMA-20",
+                f"RSI {'above' if rsi > 50 else 'below'} 50 ({rsi:.1f})" if rsi is not None else "RSI: unavailable",
+                f"MACD histogram {'positive' if macd_hist > 0 else 'negative'} ({macd_hist:.4f})" if macd_hist is not None else "MACD: unavailable",
+                f"Volume surge {vol_surge:.2f}x 20-day average" if vol_surge is not None else "Volume: unavailable",
+                f"Price {'above' if sma_20 is not None and price > sma_20 else 'below'} SMA-20" if sma_20 is not None else "SMA-20: unavailable",
             ],
             "pe_ratio": stock.get("pe_ratio", 25.0),
             "rsi": rsi,
             "macd": macd,
-            "prediction_models": {
-                "XGBoost": {"score": round(score, 2), "signal": signal},
-                "LightGBM": {"score": round(score * 0.95, 2), "signal": signal},
-                "Neural Net": {"score": round(score * 0.90, 2), "signal": signal},
-                "Prophet": {"score": round(score * 0.75, 2), "signal": signal},
-            },
+            # prediction_models is intentionally empty: no trained XGBoost/LightGBM/
+            # Neural Net/Prophet exists in this codebase. Fake scores are not shown.
+            "prediction_models": {},
+            "rule_version": "tech_consensus_v1",
+            "analysis_mode": "deterministic_rule_based",
         }
 
     def _default_prediction(self, symbol: str) -> Dict:

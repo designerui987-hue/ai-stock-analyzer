@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   Activity,
+  BarChart2,
   ShoppingBag,
 } from 'lucide-react';
 
@@ -28,6 +29,7 @@ const NAV = [
   { href: '/heatmap', icon: Zap, label: 'Market Heatmap' },
   { href: '/insights', icon: Brain, label: 'AI Insights' },
   { href: '/performance', icon: Activity, label: 'Performance Ledger' },
+  { href: '/backtest', icon: BarChart2, label: 'Backtest Engine' },
   { href: '/assistant', icon: MessageSquare, label: 'AI Assistant' },
   { href: '/settings', icon: Settings, label: 'Settings' },
 ];

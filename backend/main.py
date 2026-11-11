@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from api import stocks, portfolio, assistant, alerts, market, auth
+from api import stocks, portfolio, assistant, alerts, market, auth, fundamentals
 from config import settings
 from db.session import init_db
 
@@ -10,6 +10,7 @@ from db.session import init_db
 async def lifespan(app: FastAPI):
     print("AI Stock Platform Backend Starting...")
     print(f"Live data: {'Enabled' if settings.has_live_data else 'Demo mode'}")
+    print(f"CORS origins: {settings.cors_origin_list}")
     init_db()
     yield
     print("Shutting down...")
@@ -24,14 +25,15 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
 app.include_router(market.router, prefix="/api/market", tags=["Market"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["Stocks"])
+app.include_router(fundamentals.router, prefix="/api/fundamentals", tags=["Fundamentals"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["Portfolio"])
 app.include_router(assistant.router, prefix="/api/assistant", tags=["AI Assistant"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["Alerts"])

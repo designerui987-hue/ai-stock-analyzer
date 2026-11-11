@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { auth } from '@/lib/api';
 import { Settings, Key, Shield, Bell, Check, User, Server, MessageSquare, Send, Smartphone, Radio, Sliders, Moon, ExternalLink, QrCode } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -64,7 +65,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     // Fetch broker connection status
-    fetch('/api/broker/connection?userId=demo_user')
+    fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
       .then((res) => res.json())
       .then((json) => {
         if (json.success) {
@@ -87,7 +88,7 @@ export default function SettingsPage() {
     }
 
     // Fetch alert preferences from backend
-    fetch('/api/alerts/preferences?userId=demo_user')
+    fetch('/api/alerts/preferences', { headers: auth.getAuthHeaders() })
       .then((res) => res.json())
       .then((json) => {
         if (json.success && json.preference) {
@@ -122,8 +123,8 @@ export default function SettingsPage() {
         };
         await fetch('/api/alerts/subscribe-push', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ subscription: mockSub, userId: 'demo_user' }),
+          headers: auth.getAuthHeaders(),
+          body: JSON.stringify({ subscription: mockSub }),
         });
       }
     } catch (e) {
@@ -144,9 +145,8 @@ export default function SettingsPage() {
     // Save alert preferences to backend API
     await fetch('/api/alerts/preferences', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: auth.getAuthHeaders(),
       body: JSON.stringify({
-        userId: 'demo_user',
         channels_enabled: channels,
         alert_types_subscribed: alertTypes,
         quiet_hours: quietHours,
@@ -378,7 +378,7 @@ export default function SettingsPage() {
               </div>
             ) : (
               <a
-                href="https://t.me/StockAIBot?start=demo_user"
+                href="https://t.me/StockAIBot"
                 target="_blank"
                 rel="noreferrer"
                 className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition-colors"
@@ -553,8 +553,8 @@ export default function SettingsPage() {
                   onClick={async () => {
                     await fetch('/api/broker/connection', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ action: 'disconnect', userId: 'demo_user' }),
+                      headers: auth.getAuthHeaders(),
+                      body: JSON.stringify({ action: 'disconnect' }),
                     });
                     setBrokerConn({ connected: false, status: 'DISCONNECTED' });
                   }}
@@ -568,8 +568,8 @@ export default function SettingsPage() {
                   onClick={async () => {
                     await fetch('/api/broker/connection', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ action: 'connect_demo', userId: 'demo_user' }),
+                      headers: auth.getAuthHeaders(),
+                      body: JSON.stringify({ action: 'connect_demo' }),
                     });
                     setBrokerConn({ connected: true, status: 'CONNECTED' });
                   }}

@@ -1,10 +1,24 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
+import { z } from 'zod';
+
+const PreferencesPostSchema = z.object({
+  channels_enabled: z.record(z.string(), z.boolean()).optional(),
+  alert_types_subscribed: z.array(z.string()).optional(),
+  quiet_hours: z.object({
+    enabled: z.boolean(),
+    start: z.string(),
+    end: z.string(),
+  }).optional(),
+  min_confidence_threshold: z.number().min(0).max(100).optional(),
+  whatsapp_number: z.string().max(20).nullable().optional(),
+  telegram_chat_id: z.string().max(50).nullable().optional(),
+});
 
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('userId') || 'demo_user';
+    const userId = getVerifiedUserId(req);
 
     let pref = await prisma.alertPreference.findUnique({
       where: { user_id: userId },
@@ -26,6 +40,9 @@ export async function GET(req: Request) {
       },
     });
   } catch (err: any) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
+    }
     console.error('Fetch preferences error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
@@ -33,16 +50,26 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const userId = getVerifiedUserId(req);
+
+    const rawBody = await req.json();
+    const parseResult = PreferencesPostSchema.safeParse(rawBody);
+
+    if (!parseResult.success) {
+      return NextResponse.json(
+        { success: false, error: 'Validation failed', details: parseResult.error.format() },
+        { status: 400 }
+      );
+    }
+
     const {
-      userId = 'demo_user',
       channels_enabled,
       alert_types_subscribed,
       quiet_hours,
       min_confidence_threshold,
       whatsapp_number,
       telegram_chat_id,
-    } = body;
+    } = parseResult.data;
 
     const data: any = {};
     if (channels_enabled !== undefined) data.channels_enabled = JSON.stringify(channels_enabled);
@@ -68,6 +95,9 @@ export async function POST(req: Request) {
       },
     });
   } catch (err: any) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
+    }
     console.error('Update preferences error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

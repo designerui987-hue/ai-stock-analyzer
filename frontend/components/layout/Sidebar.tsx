@@ -17,6 +17,7 @@ import {
   ChevronRight,
   ShieldCheck,
   Activity,
+  BarChart2,
   ShoppingBag,
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -30,6 +31,7 @@ const NAV = [
   { href: '/assistant', icon: Bot, label: 'AI Assistant' },
   { href: '/insights', icon: Sparkles, label: 'AI Insights' },
   { href: '/performance', icon: Activity, label: 'Performance Ledger' },
+  { href: '/backtest', icon: BarChart2, label: 'Backtest Engine' },
   { href: '/heatmap', icon: Grid, label: 'Market Heatmap' },
   { href: '/settings', icon: Settings, label: 'Settings' },
 ];
@@ -141,6 +143,13 @@ export default function Sidebar() {
           )}
         </AnimatePresence>
 
+        {!collapsed && (
+          <div className="flex items-center justify-center gap-3 text-[10px] text-slate-400 py-1">
+            <Link href="/terms" className="hover:underline hover:text-slate-600 dark:hover:text-slate-300">Terms</Link>
+            <span>•</span>
+            <Link href="/privacy" className="hover:underline hover:text-slate-600 dark:hover:text-slate-300">Privacy</Link>
+          </div>
+        )}
         <button
           onClick={() => setCollapsed((c) => !c)}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-btn text-xs font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors"

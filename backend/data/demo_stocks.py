@@ -1,7 +1,15 @@
-"""Demo stock data for Indian markets - used when no API keys are configured."""
+"""
+Demo stock data for Indian markets.
 
-import random
-from datetime import datetime, timedelta
+NIFTY50_STOCKS / DEMO_NEWS are used as:
+  • search / list fallback when yfinance is unavailable, and
+  • DEMO_MODE static fixtures (requires DEMO_MODE=true + visible banner in UI).
+
+generate_chart_data() always fetches real data from yfinance.
+No random() calls in this file.
+"""
+
+from datetime import datetime
 
 NIFTY50_STOCKS = {
     "RELIANCE": {
@@ -374,33 +382,49 @@ DEMO_NEWS = [
 
 
 def generate_chart_data(symbol: str, days: int = 365):
-    """Generate realistic-looking OHLCV chart data for demo purposes."""
-    stock = NIFTY50_STOCKS.get(symbol, NIFTY50_STOCKS["RELIANCE"])
-    base_price = stock["price"]
-    data = []
-    current_price = base_price * 0.85
-    now = datetime.now()
+    """
+    Fetch real OHLCV chart data from yfinance for the given NSE symbol.
 
-    for i in range(days):
-        date = now - timedelta(days=days - i)
-        daily_return = random.gauss(0.0005, 0.018)
-        current_price *= 1 + daily_return
-        high = current_price * (1 + abs(random.gauss(0, 0.012)))
-        low = current_price * (1 - abs(random.gauss(0, 0.012)))
-        open_price = current_price * (1 + random.gauss(0, 0.005))
-        volume = int(stock["avg_volume"] * (0.5 + random.random()))
+    Returns a list of dicts with keys: date, timestamp, open, high, low, close, volume.
+    If yfinance is unavailable, returns an explicit unavailable sentinel dict.
+    """
+    import yfinance as yf
+    from datetime import timezone
 
-        data.append({
-            "date": date.strftime("%Y-%m-%d"),
-            "timestamp": int(date.timestamp()),
-            "open": round(open_price, 2),
-            "high": round(high, 2),
-            "low": round(low, 2),
-            "close": round(current_price, 2),
-            "volume": volume,
-        })
+    query = symbol if "." in symbol else f"{symbol}.NS"
+    period_map = {30: "1mo", 90: "3mo", 180: "6mo", 365: "1y", 1825: "5y"}
+    period = period_map.get(days, "1y")
+    as_of = datetime.now(timezone.utc).isoformat()
 
-    return data
+    try:
+        hist = yf.Ticker(query).history(period=period)
+        if hist.empty:
+            return [{"status": "unavailable", "reason": f"No yfinance data for {symbol}", "as_of": as_of, "source": "yfinance"}]
+
+        result = []
+        for dt_idx, row in hist.iterrows():
+            # yfinance returns timezone-aware Timestamps; convert to UTC
+            if hasattr(dt_idx, "to_pydatetime"):
+                dt = dt_idx.to_pydatetime()
+            else:
+                dt = dt_idx
+            result.append({
+                "date": dt.strftime("%Y-%m-%d"),
+                "timestamp": int(dt.timestamp()),
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row["Volume"]),
+                "source": "yfinance",
+                "as_of": as_of,
+            })
+        return result
+
+    except Exception as exc:
+        import logging
+        logging.getLogger("demo_stocks").warning("generate_chart_data(%s) yfinance error: %s", symbol, exc)
+        return [{"status": "unavailable", "reason": str(exc), "as_of": as_of, "source": "yfinance"}]
 
 
 DEMO_PORTFOLIO = [

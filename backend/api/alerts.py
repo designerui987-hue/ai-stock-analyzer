@@ -1,6 +1,5 @@
 """Smart alerts API endpoints."""
 
-import random
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -70,7 +69,7 @@ def generate_demo_alerts():
                     conf=pred.get("confidence", 70),
                     target=pred.get("exit_price", 0),
                     risk=pred.get("risk_score", 5),
-                    vol=random.randint(120, 250),
+                    vol=150,
                 ),
                 "time": times[min(i, len(times) - 1)],
                 "read": i > 0,

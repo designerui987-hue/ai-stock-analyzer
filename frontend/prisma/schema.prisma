@@ -1,15 +1,13 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Signal {
@@ -28,6 +26,9 @@ model Signal {
   realized_pnl_pct Float?
   horizon_days     Int
   rationale        String
+  rule_version     String    @default("v1.0-deterministic-quant")
+  source           String    @default("yfinance")
+  as_of            DateTime  @default(now())
 }
 
 model AlertPreference {
@@ -81,4 +82,3 @@ model OrderLog {
   placed_at        DateTime @default(now())
   response_raw     String   // Raw JSON string
 }
-

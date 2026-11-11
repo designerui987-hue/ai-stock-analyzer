@@ -13,7 +13,8 @@ export async function POST(req: Request) {
       // Telegram /start deep link format: /start demo_user
       if (text.startsWith('/start')) {
         const parts = text.split(' ');
-        const userId = parts[1] || 'demo_user';
+        const userId = parts[1]?.trim();
+        if (!userId) return NextResponse.json({ ok: true, message: 'Account code required' });
 
         await prisma.alertPreference.upsert({
           where: { user_id: userId },

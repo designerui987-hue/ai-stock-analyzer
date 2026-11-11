@@ -1,6 +1,7 @@
 """AI Assistant chat API endpoint."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from auth.security import get_current_user
 from models.analysis import ChatRequest
 from data.demo_stocks import NIFTY50_STOCKS
 from ai_models.prediction_engine import prediction_engine
@@ -127,6 +128,6 @@ def generate_ai_response(message: str) -> dict:
 
 
 @router.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, user_id: str = Depends(get_current_user)):
     """Chat with the AI assistant."""
     return generate_ai_response(request.message)
