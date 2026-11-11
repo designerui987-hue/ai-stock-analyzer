@@ -19,6 +19,7 @@ import {
   Activity,
   BarChart2,
   ShoppingBag,
+  Database,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -33,6 +34,7 @@ const NAV = [
   { href: '/performance', icon: Activity, label: 'Performance Ledger' },
   { href: '/backtest', icon: BarChart2, label: 'Backtest Engine' },
   { href: '/heatmap', icon: Grid, label: 'Market Heatmap' },
+  { href: '/data-sources', icon: Database, label: 'Data Sources' },
   { href: '/settings', icon: Settings, label: 'Settings' },
 ];
 

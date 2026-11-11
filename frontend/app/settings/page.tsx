@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { auth } from '@/lib/api';
 import { Settings, Key, Shield, Bell, Check, User, Server, MessageSquare, Send, Smartphone, Radio, Sliders, Moon, ExternalLink, QrCode } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
@@ -18,13 +19,6 @@ export default function SettingsPage() {
     riskPerTradePct: 1.0,
     maxConcentrationPct: 20,
     maxOpenPositions: 8,
-  });
-
-  const [apiKeys, setApiKeys] = useState({
-    finnhub: '',
-    twelvedata: '',
-    alphaVantage: '',
-    openai: '',
   });
 
   const [saved, setSaved] = useState(false);
@@ -587,68 +581,37 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      {/* API Credentials */}
-      <Card size="large" className="space-y-6">
+      {/* Server-Side Data Provider Status & Credentials */}
+      <Card size="large" className="space-y-4">
         <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-4">
           <div className="flex items-center space-x-2">
             <Key className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              API Provider Credentials
+              Data Sources &amp; Provider Credentials
             </h3>
           </div>
-          <Badge variant="indigo" size="sm">
-            Encrypted Client-Side
+          <Badge variant="emerald" size="sm">
+            Server-Side Env Only
           </Badge>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
-              Finnhub API Key
-            </label>
-            <Input
-              type="password"
-              placeholder="fn_live_..."
-              value={apiKeys.finnhub}
-              onChange={(e) => setApiKeys({ ...apiKeys, finnhub: e.target.value })}
-            />
-          </div>
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+          All market and research provider credentials (<code className="font-mono">ALPHA_VANTAGE_API_KEY</code>,{" "}
+          <code className="font-mono">TWELVEDATA_API_KEY</code>, <code className="font-mono">GNEWS_API_KEY</code>,{" "}
+          <code className="font-mono">ZERODHA_API_KEY</code>) are loaded strictly server-side from environment variables
+          and never stored or exposed in browser bundles. No-key free providers (Frankfurter, World Bank, MFapi) work automatically.
+        </p>
 
-          <div>
-            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
-              TwelveData API Key
-            </label>
-            <Input
-              type="password"
-              placeholder="td_live_..."
-              value={apiKeys.twelvedata}
-              onChange={(e) => setApiKeys({ ...apiKeys, twelvedata: e.target.value })}
-            />
-          </div>
-
-          <div>
-            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
-              Alpha Vantage Key
-            </label>
-            <Input
-              type="password"
-              placeholder="av_live_..."
-              value={apiKeys.alphaVantage}
-              onChange={(e) => setApiKeys({ ...apiKeys, alphaVantage: e.target.value })}
-            />
-          </div>
-
-          <div>
-            <label className="text-caption font-medium text-slate-500 mb-1.5 block">
-              OpenAI API Key
-            </label>
-            <Input
-              type="password"
-              placeholder="sk-proj-..."
-              value={apiKeys.openai}
-              onChange={(e) => setApiKeys({ ...apiKeys, openai: e.target.value })}
-            />
-          </div>
+        <div className="flex items-center justify-between pt-2">
+          <span className="text-xs text-slate-500">
+            Inspect live provider status, remaining estimated quotas, data frequencies, and disabled reasons.
+          </span>
+          <Link
+            href="/data-sources"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-btn text-xs font-semibold transition-colors shrink-0"
+          >
+            Open Data Sources Panel <ExternalLink className="w-3.5 h-3.5" />
+          </Link>
         </div>
       </Card>
 
