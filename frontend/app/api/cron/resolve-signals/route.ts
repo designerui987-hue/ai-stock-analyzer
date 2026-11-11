@@ -14,13 +14,14 @@ import { prisma } from '@/lib/prisma';
 import { resolveSignalWithBars, evaluateSignal, DailyBar } from '@/lib/signal-resolution';
 import { sendAlert } from '@/lib/alerts/dispatch';
 import { verifyCronSecret, AuthError } from '@/lib/auth/session';
+import { getServerBackendUrl } from '@/lib/api';
 
 /**
  * Fetch real daily OHLCV bars from unified backend market data service.
  */
 async function fetchDailyBars(symbol: string): Promise<DailyBar[] | null> {
   try {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const backendUrl = getServerBackendUrl();
     const res = await fetch(`${backendUrl}/api/stocks/${encodeURIComponent(symbol)}/chart?period=3M`);
     if (res.ok) {
       const data = await res.json();
@@ -39,7 +40,7 @@ async function fetchDailyBars(symbol: string): Promise<DailyBar[] | null> {
  */
 async function getLivePrice(symbol: string): Promise<number | null> {
   try {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const backendUrl = getServerBackendUrl();
     const res = await fetch(`${backendUrl}/api/stocks/quote/${encodeURIComponent(symbol)}`);
     if (res.ok) {
       const data = await res.json();

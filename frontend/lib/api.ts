@@ -1,5 +1,18 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
+/**
+ * Resolve backend URL for Next.js Route Handlers (server-side only).
+ * Fails closed in production if BACKEND_API_URL / NEXT_PUBLIC_API_URL is missing.
+ */
+export function getServerBackendUrl(): string {
+  const configured = (process.env.BACKEND_API_URL || process.env.NEXT_PUBLIC_API_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('BACKEND_API_URL or NEXT_PUBLIC_API_URL must be configured in production.');
+  }
+  return 'http://localhost:8000';
+}
+
 // JWT token management
 export const auth = {
   getToken: () => {
@@ -160,7 +173,11 @@ export const api = {
     onError?: (err: any) => void
   ) => {
     if (typeof window === 'undefined') return () => {};
-    const token = auth.getToken() || '';
+    const token = auth.getToken();
+    if (!token) {
+      if (onError) onError({ code: 'AUTH_REQUIRED' });
+      return () => {};
+    }
     const symParam = encodeURIComponent(symbols.join(','));
     const url = `${API_BASE}/api/stocks/stream?symbols=${symParam}&token=${encodeURIComponent(token)}`;
     const eventSource = new EventSource(url);

@@ -9,6 +9,32 @@ import { Button } from '@/components/ui/Button';
 import { DEMO_INSIGHTS, DEMO_ALERTS } from '@/lib/data';
 
 export default function InsightsPage() {
+  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+
+  if (!isDemoMode) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 py-8">
+        <div>
+          <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
+            Market Insights
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Automated intelligence feed is unavailable. Static demo insights are disabled (`DEMO_MODE=false`).
+          </p>
+        </div>
+        <Card className="p-6 space-y-3 border-amber-500/30">
+          <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-semibold text-sm">
+            <AlertTriangle className="w-4 h-4" />
+            <span>Insights Feed Unavailable</span>
+          </div>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            No fabricated AI insight telemetry or placeholder confidence numbers are displayed in live mode. Use individual stock analysis pages or Data Sources for verified real-world data.
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
       {/* Top Header */}

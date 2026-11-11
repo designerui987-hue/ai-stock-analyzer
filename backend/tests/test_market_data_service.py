@@ -131,28 +131,34 @@ def test_market_hours_weekday_trading_window():
 
 
 def test_calculate_freshness_states():
-    """Test all 4 freshness states: LIVE, DELAYED (15m), STALE, UNAVAILABLE."""
-    ref_time = datetime(2026, 11, 4, 11, 0, 0, tzinfo=timezone.utc)
+    """Test freshness states: LIVE, DELAYED, STALE, MARKET_CLOSED, UNAVAILABLE."""
+    # Wednesday 16:30 IST = 11:00 UTC -> Post-close/closed; test 10:30 IST = 05:00 UTC (market open)
+    ref_time = datetime(2026, 11, 4, 5, 0, 0, tzinfo=timezone.utc)
 
-    # 1. LIVE: realtime ticker tick received recently
-    recent_tick = datetime(2026, 11, 4, 10, 59, 45, tzinfo=timezone.utc)
+    # 1. LIVE: realtime ticker tick received recently during open session
+    recent_tick = datetime(2026, 11, 4, 4, 59, 45, tzinfo=timezone.utc)
     assert MarketHours.calculate_freshness(
         as_of=recent_tick, is_realtime=True, market_open=True, reference_time=ref_time
     ) == "LIVE"
 
-    # 2. DELAYED (15m): market open, quote within 15 minutes
-    delayed_quote = datetime(2026, 11, 4, 10, 50, 0, tzinfo=timezone.utc)  # 10m old
+    # 2. DELAYED: market open, quote within 30 minutes
+    delayed_quote = datetime(2026, 11, 4, 4, 50, 0, tzinfo=timezone.utc)  # 10m old
     assert MarketHours.calculate_freshness(
         as_of=delayed_quote, is_realtime=False, market_open=True, reference_time=ref_time
-    ) == "DELAYED (15m)"
+    ) == "DELAYED"
 
-    # 3. STALE: market open, but quote is 25 minutes old (> 15m)
-    stale_quote = datetime(2026, 11, 4, 10, 35, 0, tzinfo=timezone.utc)  # 25m old
+    # 3. STALE: market open, quote is 45 minutes old (> 30m)
+    stale_quote = datetime(2026, 11, 4, 4, 15, 0, tzinfo=timezone.utc)  # 45m old
     assert MarketHours.calculate_freshness(
         as_of=stale_quote, is_realtime=False, market_open=True, reference_time=ref_time
     ) == "STALE"
 
-    # 4. UNAVAILABLE: None timestamp
+    # 4. MARKET_CLOSED: recent tick outside NSE trading session
+    assert MarketHours.calculate_freshness(
+        as_of=recent_tick, is_realtime=True, market_open=False, reference_time=ref_time
+    ) == "MARKET_CLOSED"
+
+    # 5. UNAVAILABLE: None timestamp
     assert MarketHours.calculate_freshness(as_of=None) == "UNAVAILABLE"
 
 

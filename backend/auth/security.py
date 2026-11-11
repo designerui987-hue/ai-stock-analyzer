@@ -72,3 +72,18 @@ async def get_stream_user(
     if not raw_token:
         raise HTTPException(status_code=401, detail="Authentication token required for streaming")
     return decode_jwt_token(raw_token)
+
+
+optional_security = HTTPBearer(auto_error=False)
+
+
+async def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+) -> str | None:
+    """Resolve authenticated user_id when Bearer JWT is supplied; return None if anonymous."""
+    if not credentials or not credentials.credentials:
+        return None
+    try:
+        return decode_jwt_token(credentials.credentials)
+    except Exception:
+        return None

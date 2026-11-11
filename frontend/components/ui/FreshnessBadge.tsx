@@ -12,6 +12,7 @@ export type FreshnessStatus =
   | 'REFERENCE RATE'
   | 'NAV'
   | 'STALE'
+  | 'MARKET_CLOSED'
   | 'UNAVAILABLE';
 
 interface FreshnessBadgeProps {
@@ -76,6 +77,12 @@ export function FreshnessBadge({
           label: 'STALE',
           wrapperClass: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
           dot: <span className="inline-flex rounded-full h-2 w-2 bg-orange-400 mr-1.5" />,
+        };
+      case 'MARKET_CLOSED':
+        return {
+          label: 'MARKET CLOSED',
+          wrapperClass: 'bg-slate-500/10 text-slate-500 border-slate-500/30 dark:text-slate-400',
+          dot: <span className="inline-flex rounded-full h-2 w-2 bg-slate-400 mr-1.5" />,
         };
       case 'UNAVAILABLE':
       default:

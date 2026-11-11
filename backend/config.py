@@ -1,17 +1,27 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import Optional, List
 import os
 
+_BACKEND_ENV_PATH = str(Path(__file__).resolve().parent / ".env")
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_BACKEND_ENV_PATH,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # App
     app_name: str = "AI Stock Platform"
     app_env: str = "development"  # "development" | "staging" | "production"
     debug: bool = True
     demo_mode: bool = False
+    research_rate_limit_per_minute: int = 30
+    kite_ws_enabled: bool = False
+    feed_quote_max_age_seconds: int = 60
 
     # Database
     database_url: str = "sqlite:///./ai_stock.db"
@@ -29,6 +39,7 @@ class Settings(BaseSettings):
     # Indian Broker APIs
     zerodha_api_key: Optional[str] = None
     zerodha_api_secret: Optional[str] = None
+    token_encryption_secret: Optional[str] = None
     upstox_api_key: Optional[str] = None
     upstox_api_secret: Optional[str] = None
 
@@ -57,8 +68,28 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
+    def normalized_app_env(self) -> str:
+        return (self.app_env or "").strip().lower()
+
+    @property
+    def is_explicit_development(self) -> bool:
+        """Only explicit development environments may enable dev-only providers."""
+        return self.normalized_app_env in ("development", "dev")
+
+    @property
+    def is_production(self) -> bool:
+        return self.normalized_app_env == "production"
+
+    @property
     def has_live_data(self) -> bool:
-        return True
+        return bool(self.zerodha_api_key and self.zerodha_api_secret)
+
+
+def get_settings(reload: bool = False) -> Settings:
+    """Return validated application settings; reload from env/.env when requested."""
+    if reload:
+        return Settings()
+    return settings
 
 
 # Global settings instance - requires SECRET_KEY to be present in environment or .env

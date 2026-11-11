@@ -54,7 +54,7 @@ export default function BacktestPage() {
     setError(null);
     try {
       const activeSym = (customSymbol.trim() || sym).toUpperCase().replace('.NS', '');
-      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || '';
       const res = await fetch(
         `${backendUrl}/api/stocks/backtest?symbol=${encodeURIComponent(activeSym)}&years=${y}&initial_capital=${cap}`
       );

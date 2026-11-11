@@ -175,11 +175,16 @@ export default function StockAnalysisPage() {
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const [orderProductType, setOrderProductType] = useState<'CNC' | 'MIS'>('CNC');
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
+  const [limitPriceInput, setLimitPriceInput] = useState<string>('');
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
   const [orderSuccessMsg, setOrderSuccessMsg] = useState<string | null>(null);
   const [orderMode, setOrderMode] = useState<'PAPER' | 'LIVE'>('PAPER');
   const [liveOptIn, setLiveOptIn] = useState(false);
+  const [confirmLiveTicket, setConfirmLiveTicket] = useState(false);
+  const [orderIdempotencyKey, setOrderIdempotencyKey] = useState<string>(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ord_${Date.now()}`
+  );
 
   useEffect(() => {
     fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
@@ -197,21 +202,30 @@ export default function StockAnalysisPage() {
     setOrderError(null);
     setOrderSuccessMsg(null);
 
+    const parsedLimit = limitPriceInput ? Number(limitPriceInput) : ai.entry || stock.price;
     try {
       const res = await fetch('/api/broker/orders', {
         method: 'POST',
-        headers: auth.getAuthHeaders(),
+        headers: {
+          ...auth.getAuthHeaders(),
+          'Idempotency-Key': orderIdempotencyKey,
+        },
         body: JSON.stringify({
           symbol: stock.symbol,
+          exchange: 'NSE',
           transaction_type: ai.signal === 'BUY' ? 'BUY' : 'SELL',
           quantity: sizingResult.position_size_shares,
           order_type: orderType,
           product_type: orderProductType,
+          limit_price: orderType === 'LIMIT' ? parsedLimit : undefined,
+          expected_price: typeof stock.price === 'number' && stock.price > 0 ? stock.price : undefined,
           stop_loss_price: ai.stopLoss,
           target_price: ai.target,
           user_confirmed: true,
           mode: orderMode,
           live_trading_opt_in: orderMode === 'LIVE' ? liveOptIn : false,
+          confirm_live_ticket: orderMode === 'LIVE' ? confirmLiveTicket : false,
+          idempotency_key: orderIdempotencyKey,
         }),
       });
 
@@ -219,13 +233,19 @@ export default function StockAnalysisPage() {
       if (!data.success) {
         setOrderError(data.error || 'Order placement failed');
       } else {
-        const msg = data.mode === 'PAPER'
-          ? `📝 Paper Order #${data.order.broker_order_id} executed at ₹${data.order.price} (Simulation)`
-          : `✅ Live Order #${data.order.broker_order_id} placed successfully with Zerodha Kite!`;
+        const execStatus = data.order?.status || 'RECORDED';
+        const priceDisplay = typeof data.order?.price === 'number' ? `₹${data.order.price}` : 'pending limit fill';
+        const msg = data.mode === 'PAPER'
+          ? `📝 Paper Order #${data.order.broker_order_id} (${execStatus}) at ${priceDisplay} (Simulation)`
+          : `✅ Live Order #${data.order.broker_order_id} (${execStatus}) acknowledged by Zerodha Kite!`;
         setOrderSuccessMsg(msg);
+        setOrderIdempotencyKey(
+          typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ord_${Date.now()}`
+        );
         setTimeout(() => {
           setIsOrderModalOpen(false);
           setOrderSuccessMsg(null);
+          setConfirmLiveTicket(false);
         }, 2000);
       }
     } catch (e: any) {
@@ -235,9 +255,7 @@ export default function StockAnalysisPage() {
     }
   };
 
-  const CHART_DATA = chartData.length > 0 ? chartData : [
-    { time: 'Loading...', value: stock.price }
-  ];
+  const CHART_DATA = chartData;
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
@@ -252,7 +270,7 @@ export default function StockAnalysisPage() {
               AI {ai.signal}
             </Badge>
             <FreshnessBadge
-              status={stock.freshness || (stock.is_unavailable ? 'UNAVAILABLE' : 'DELAYED (15m)')}
+              status={stock.freshness || (stock.is_unavailable ? 'UNAVAILABLE' : 'DELAYED')}
               asOf={stock.as_of}
               source={stock.source}
               showDetails={true}
@@ -700,62 +718,73 @@ export default function StockAnalysisPage() {
                     </div>
                   </div>
 
-                  {/* Execution Mode Selector (Paper vs Live) */}
-                  <div className="space-y-2">
-                    <label className="text-slate-500 font-medium block text-xs">
-                      Trading Mode:
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => { setOrderMode('PAPER'); setLiveOptIn(false); }}
-                        className={`p-2.5 rounded-lg border text-left transition-all ${
-                          orderMode === 'PAPER'
-                            ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 ring-1 ring-indigo-600'
-                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs">📝 Paper Trading</span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-medium">Default</span>
-                        </div>
-                        <p className="text-[10px] text-slate-500 mt-0.5">Real-time simulation, zero financial risk</p>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setOrderMode('LIVE')}
-                        className={`p-2.5 rounded-lg border text-left transition-all ${
-                          orderMode === 'LIVE'
-                            ? 'border-amber-600 bg-amber-50/60 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-1 ring-amber-600'
-                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs">⚡ Live Kite Trading</span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 font-medium">Opt-in</span>
-                        </div>
-                        <p className="text-[10px] text-slate-500 mt-0.5">Routes to Zerodha Kite with real capital</p>
-                      </button>
-                    </div>
-
-                    {orderMode === 'LIVE' && (
-                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2">
-                        <label className="flex items-start space-x-2 cursor-pointer text-xs text-amber-900 dark:text-amber-200">
-                          <input
-                            type="checkbox"
-                            checked={liveOptIn}
-                            onChange={(e) => setLiveOptIn(e.target.checked)}
-                            className="mt-0.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
-                          />
-                          <span className="font-medium text-[11px] leading-tight">
-                            I explicitly opt in to Live Trading. I understand real market orders will be submitted to Zerodha Kite and capital will be at risk.
-                          </span>
-                        </label>
-                      </div>
-                    )}
-                  </div>
-
+                  {/* Execution Mode Selector (Paper vs Live) */}
+                  <div className="space-y-2">
+                    <label className="text-slate-500 font-medium block text-xs">
+                      Trading Mode:
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setOrderMode('PAPER'); setLiveOptIn(false); }}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          orderMode === 'PAPER'
+                            ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 ring-1 ring-indigo-600'
+                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs">📝 Paper Trading</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-medium">Default</span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Real-time simulation, zero financial risk</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setOrderMode('LIVE')}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                          orderMode === 'LIVE'
+                            ? 'border-amber-600 bg-amber-50/60 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-1 ring-amber-600'
+                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs">⚡ Live Kite Trading</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 font-medium">Opt-in</span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Routes to Zerodha Kite with real capital</p>
+                      </button>
+                    </div>
+
+                    {orderMode === 'LIVE' && (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2">
+                        <label className="flex items-start space-x-2 cursor-pointer text-xs text-amber-900 dark:text-amber-200">
+                          <input
+                            type="checkbox"
+                            checked={liveOptIn}
+                            onChange={(e) => setLiveOptIn(e.target.checked)}
+                            className="mt-0.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                          />
+                          <span className="font-medium text-[11px] leading-tight">
+                            I explicitly opt in to Live Trading. I understand real market orders will be submitted to Zerodha Kite and capital will be at risk.
+                          </span>
+                        </label>
+                        <label className="flex items-start space-x-2 cursor-pointer text-xs text-amber-900 dark:text-amber-200">
+                          <input
+                            type="checkbox"
+                            checked={confirmLiveTicket}
+                            onChange={(e) => setConfirmLiveTicket(e.target.checked)}
+                            className="mt-0.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                          />
+                          <span className="font-medium text-[11px] leading-tight">
+                            Confirm Live Ticket: NSE {ai.signal} {sizingResult.position_size_shares} {stock.symbol} ({orderType}).
+                          </span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Product & Order Type Selectors */}
                   <div className="grid grid-cols-2 gap-4 text-xs">
                     <div>
@@ -782,10 +811,25 @@ export default function StockAnalysisPage() {
                         className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
                       >
                         <option value="MARKET">MARKET Order</option>
-                        <option value="LIMIT">LIMIT Order (₹{ai.entry})</option>
+                        <option value="LIMIT">LIMIT Order</option>
                       </select>
                     </div>
                   </div>
+
+                  {orderType === 'LIMIT' && (
+                    <div className="text-xs">
+                      <label className="text-slate-500 font-medium block mb-1">
+                        Limit Price (INR):
+                      </label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        value={limitPriceInput || String(ai.entry || stock.price || '')}
+                        onChange={(e) => setLimitPriceInput(e.target.value)}
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100 font-mono font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  )}
 
                   {/* Warning & SEBI Disclaimer */}
                   <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-card text-[11px] text-indigo-900 dark:text-indigo-200 leading-normal space-y-1">
@@ -823,7 +867,7 @@ export default function StockAnalysisPage() {
                       variant="primary"
                       size="md"
                       onClick={handleExecuteOrder}
-                      disabled={orderSubmitting || (orderMode === 'LIVE' && !liveOptIn)}
+                      disabled={orderSubmitting || (orderMode === 'LIVE' && (!liveOptIn || !confirmLiveTicket))}
                       className={ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700'}
                     >
                       {orderSubmitting

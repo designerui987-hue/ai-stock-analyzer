@@ -69,6 +69,8 @@ model OrderLog {
   id               String   @id @default(uuid())
   user_id          String
   broker           String   @default("KITE")
+  mode             String   @default("PAPER") // PAPER | LIVE
+  exchange         String   @default("NSE")   // NSE | BSE
   symbol           String
   transaction_type String   // BUY | SELL
   quantity         Int
@@ -78,7 +80,14 @@ model OrderLog {
   product_type     String   // CNC | MIS | NRML
   source           String?  // signal_id
   broker_order_id  String?
-  status           String   // PLACED | COMPLETE | REJECTED | CANCELLED
+  idempotency_key  String?
+  quote_as_of      String?
+  slippage_bps     Float?
+  fees_inr         Float?
+  status           String   // OPEN | FILLED | PARTIAL | REJECTED | CANCELLED | UNKNOWN
   placed_at        DateTime @default(now())
   response_raw     String   // Raw JSON string
+
+  @@unique([user_id, idempotency_key])
+  @@index([user_id, mode, placed_at])
 }
