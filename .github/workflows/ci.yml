@@ -16,7 +16,7 @@ jobs:
     env:
       SECRET_KEY: test_secret_key_minimum_32_characters_long_for_ci_suite
       TOKEN_ENCRYPTION_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      DATABASE_URL: sqlite+aiosqlite:///./test_ci.db
+      DATABASE_URL: sqlite:///./test_ci.db
       ALLOWED_ORIGINS: http://localhost:3000
       CRON_SECRET: test_cron_secret_for_ci_pipeline
       DEMO_MODE: "false"
