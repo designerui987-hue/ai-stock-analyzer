@@ -12,6 +12,8 @@ import {
   evaluateNseSession,
   validateQuoteForOrder,
   simulatePaperExecution,
+  checkPaperLimitSatisfaction,
+  executePaperLimitFill,
   ServerQuotePayload,
 } from '@/lib/orders/execution';
 import { z } from 'zod';
@@ -92,6 +94,56 @@ export async function GET(req: Request) {
     }
     if (modeFilter && (modeFilter.toUpperCase() === 'PAPER' || modeFilter.toUpperCase() === 'LIVE')) {
       where.mode = modeFilter.toUpperCase();
+    }
+
+    // Evaluate resting OPEN paper limit orders against fresh quotes before returning blotter
+    const openPaperOrders = await prisma.orderLog.findMany({
+      where: { user_id: userId, mode: 'PAPER', status: 'OPEN' },
+    });
+
+    if (openPaperOrders.length > 0) {
+      const uniqueSymbols = Array.from(
+        new Set(openPaperOrders.map((o) => `${o.exchange || 'NSE'}:${o.symbol}`))
+      );
+      const quotesMap: Record<string, ServerQuotePayload | null> = {};
+      for (const pair of uniqueSymbols) {
+        const [exch, sym] = pair.split(':') as ['NSE' | 'BSE', string];
+        quotesMap[pair] = await fetchServerQuote(sym, exch, req.headers.get('authorization'));
+      }
+
+      for (const order of openPaperOrders) {
+        if (order.order_type === 'LIMIT') {
+          const pair = `${order.exchange || 'NSE'}:${order.symbol}`;
+          const q = quotesMap[pair];
+          if (q) {
+            const check = checkPaperLimitSatisfaction({
+              order: {
+                id: order.id,
+                symbol: order.symbol,
+                exchange: order.exchange,
+                transaction_type: order.transaction_type as any,
+                quantity: order.quantity,
+                order_type: order.order_type,
+                product_type: order.product_type,
+                price: order.price,
+              },
+              quote: q,
+            });
+
+            if (check.satisfied && check.fillPrice && check.fees !== undefined) {
+              await executePaperLimitFill(prisma, {
+                orderId: order.id,
+                fillPrice: check.fillPrice,
+                fees: check.fees,
+                feeBreakdown: check.feeBreakdown,
+                quoteAsOf: check.quoteAsOf,
+                quoteSource: check.quoteSource,
+                sessionName: check.sessionName,
+              });
+            }
+          }
+        }
+      }
     }
 
     const orders = await prisma.orderLog.findMany({
@@ -571,10 +623,54 @@ export async function PATCH(req: Request) {
     }
 
     if ((order as any).mode !== 'LIVE' || order.broker !== 'KITE') {
+      if (order.status !== 'OPEN') {
+        return NextResponse.json({
+          success: true,
+          order,
+          message: `Paper order is already in final state: ${order.status}`,
+        });
+      }
+
+      // Evaluate resting paper limit order against current fresh quote
+      const exch = ((order as any).exchange || 'NSE') as 'NSE' | 'BSE';
+      const quote = await fetchServerQuote(order.symbol, exch, req.headers.get('authorization'));
+      const satisfaction = checkPaperLimitSatisfaction({
+        order: {
+          id: order.id,
+          symbol: order.symbol,
+          exchange: exch,
+          transaction_type: order.transaction_type as any,
+          quantity: order.quantity,
+          order_type: order.order_type,
+          product_type: order.product_type,
+          price: order.price,
+        },
+        quote,
+      });
+
+      if (satisfaction.satisfied && satisfaction.fillPrice && satisfaction.fees !== undefined) {
+        await executePaperLimitFill(prisma, {
+          orderId: order.id,
+          fillPrice: satisfaction.fillPrice,
+          fees: satisfaction.fees,
+          feeBreakdown: satisfaction.feeBreakdown,
+          quoteAsOf: satisfaction.quoteAsOf,
+          quoteSource: satisfaction.quoteSource,
+          sessionName: satisfaction.sessionName,
+        });
+
+        const refreshed = await prisma.orderLog.findUnique({ where: { id: order.id } });
+        return NextResponse.json({
+          success: true,
+          order: refreshed,
+          message: satisfaction.reason,
+        });
+      }
+
       return NextResponse.json({
         success: true,
         order,
-        message: 'Paper orders do not require broker API reconciliation.',
+        message: satisfaction.reason,
       });
     }
 

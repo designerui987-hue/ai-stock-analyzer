@@ -19,6 +19,7 @@ export async function GET(req: Request) {
     const nonce = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
+    // Persist single-use expiring nonce tied to the user
     try {
       await prisma.oAuthState.create({
         data: {
@@ -29,7 +30,10 @@ export async function GET(req: Request) {
         },
       });
     } catch (dbErr) {
-      console.warn('[broker/kite/login] Failed to persist OAuthState in DB, falling back to HMAC cookie verification', dbErr);
+      console.error('[broker/kite/login] Failed to persist OAuthState in DB:', dbErr);
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Database unavailable. Please try linking again.')}`
+      );
     }
 
     // Sign state: payload.signature

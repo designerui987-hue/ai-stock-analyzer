@@ -92,25 +92,55 @@ export async function GET(req: Request) {
       );
     }
 
-    // 6. Single-use replay protection check via database
+    // 6. Atomically consume the matching, unused, unexpired database nonce before contacting Kite
     try {
-      const stateRecord = await prisma.oAuthState.findUnique({
-        where: { nonce: payload.nonce },
+      const result = await prisma.oAuthState.updateMany({
+        where: {
+          nonce: payload.nonce,
+          user_id: sessionUserId,
+          used: false,
+          expires_at: { gt: new Date() },
+        },
+        data: {
+          used: true,
+        },
       });
 
-      if (stateRecord) {
-        if (stateRecord.used) {
+      if (result.count === 0) {
+        // Atomic consume failed: state was either missing, already consumed (replay), expired, or belonged to another user
+        const existing = await prisma.oAuthState.findUnique({
+          where: { nonce: payload.nonce },
+        });
+
+        if (!existing) {
+          return NextResponse.redirect(
+            `${baseUrl}/settings?broker_error=${encodeURIComponent('Missing or invalid OAuth state nonce. Please try linking again.')}`
+          );
+        }
+        if (existing.user_id !== sessionUserId) {
+          return NextResponse.redirect(
+            `${baseUrl}/settings?broker_error=${encodeURIComponent('Cross-account broker link attempt rejected')}`
+          );
+        }
+        if (existing.used) {
           return NextResponse.redirect(
             `${baseUrl}/settings?broker_error=${encodeURIComponent('Replay attack detected: OAuth state has already been used')}`
           );
         }
-        await prisma.oAuthState.update({
-          where: { nonce: payload.nonce },
-          data: { used: true },
-        });
+        if (existing.expires_at <= new Date()) {
+          return NextResponse.redirect(
+            `${baseUrl}/settings?broker_error=${encodeURIComponent('OAuth state has expired (10 minute limit)')}`
+          );
+        }
+        return NextResponse.redirect(
+          `${baseUrl}/settings?broker_error=${encodeURIComponent('Invalid OAuth state. Please try linking again.')}`
+        );
       }
     } catch (dbErr) {
-      console.warn('[broker/kite/callback] Replay check DB lookup warning:', dbErr);
+      console.error('[broker/kite/callback] Database error during nonce verification:', dbErr);
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Database unavailable. Please try linking again.')}`
+      );
     }
 
     // 7. Exchange request_token server-side

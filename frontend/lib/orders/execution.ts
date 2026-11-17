@@ -310,3 +310,189 @@ export function simulatePaperExecution(params: {
   };
 }
 
+export interface PaperLimitSatisfactionResult {
+  satisfied: boolean;
+  fillPrice?: number;
+  fees?: number;
+  feeBreakdown?: ReturnType<typeof calculateIndianEquityFees>;
+  quoteAsOf?: string;
+  quoteSource?: string;
+  sessionName?: string;
+  reason: string;
+}
+
+/**
+ * Pure evaluator for paper limit orders.
+ * Strictly verifies NSE trading session, quote freshness, exchange integrity,
+ * and limit price satisfaction (BUY limit: fill <= limit; SELL limit: fill >= limit).
+ */
+export function checkPaperLimitSatisfaction(params: {
+  order: {
+    id?: string;
+    symbol: string;
+    exchange?: string;
+    transaction_type: 'BUY' | 'SELL';
+    quantity: number;
+    order_type: string;
+    product_type?: string;
+    price: number | null; // Limit price
+  };
+  quote: ServerQuotePayload | null;
+  nowUtc?: Date;
+  maxAgeSeconds?: number;
+}): PaperLimitSatisfactionResult {
+  const now = params.nowUtc || new Date();
+  const session = evaluateNseSession(now);
+
+  if (!session.open) {
+    return {
+      satisfied: false,
+      sessionName: session.session,
+      reason: `Cannot fill paper limit order while NSE session is ${session.session}.`,
+    };
+  }
+
+  const limitPrice = params.order.price;
+  if (!limitPrice || limitPrice <= 0) {
+    return {
+      satisfied: false,
+      reason: 'LIMIT order has invalid or non-positive limit price.',
+    };
+  }
+
+  const quoteCheck = validateQuoteForOrder(params.quote, {
+    expectedSymbol: params.order.symbol,
+    expectedExchange: params.order.exchange || 'NSE',
+    maxAgeSeconds: params.maxAgeSeconds ?? 60,
+    nowUtc: now,
+  });
+
+  if (!quoteCheck.valid || !quoteCheck.price) {
+    return {
+      satisfied: false,
+      reason: quoteCheck.reason || `Quote for ${params.order.symbol} is unavailable or stale.`,
+    };
+  }
+
+  const quotePrice = quoteCheck.price;
+  const slipFrac = 5 / 10000; // 5 bps modeled impact
+
+  if (params.order.transaction_type === 'BUY') {
+    if (quotePrice > limitPrice) {
+      return {
+        satisfied: false,
+        quoteAsOf: quoteCheck.asOf,
+        quoteSource: quoteCheck.source,
+        sessionName: session.session,
+        reason: `BUY LIMIT resting OPEN: Quote price ₹${quotePrice.toFixed(2)} is above limit ₹${limitPrice.toFixed(2)}.`,
+      };
+    }
+    // At a BUY limit, fill at the limit or lower
+    const rawFill = quotePrice * (1 + slipFrac);
+    const fillPrice = Number(Math.min(limitPrice, rawFill).toFixed(2));
+    const fees = calculateIndianEquityFees(
+      fillPrice * params.order.quantity,
+      'BUY',
+      (params.order.product_type as any) || 'CNC'
+    );
+    return {
+      satisfied: true,
+      fillPrice,
+      fees: fees.total_fees,
+      feeBreakdown: fees,
+      quoteAsOf: quoteCheck.asOf,
+      quoteSource: quoteCheck.source,
+      sessionName: session.session,
+      reason: `BUY LIMIT filled at ₹${fillPrice.toFixed(2)} (within limit ₹${limitPrice.toFixed(2)}) on quote ₹${quotePrice.toFixed(2)}.`,
+    };
+  } else {
+    if (quotePrice < limitPrice) {
+      return {
+        satisfied: false,
+        quoteAsOf: quoteCheck.asOf,
+        quoteSource: quoteCheck.source,
+        sessionName: session.session,
+        reason: `SELL LIMIT resting OPEN: Quote price ₹${quotePrice.toFixed(2)} is below limit ₹${limitPrice.toFixed(2)}.`,
+      };
+    }
+    // At a SELL limit, fill at the limit or higher
+    const rawFill = quotePrice * (1 - slipFrac);
+    const fillPrice = Number(Math.max(limitPrice, rawFill).toFixed(2));
+    const fees = calculateIndianEquityFees(
+      fillPrice * params.order.quantity,
+      'SELL',
+      (params.order.product_type as any) || 'CNC'
+    );
+    return {
+      satisfied: true,
+      fillPrice,
+      fees: fees.total_fees,
+      feeBreakdown: fees,
+      quoteAsOf: quoteCheck.asOf,
+      quoteSource: quoteCheck.source,
+      sessionName: session.session,
+      reason: `SELL LIMIT filled at ₹${fillPrice.toFixed(2)} (within limit ₹${limitPrice.toFixed(2)}) on quote ₹${quotePrice.toFixed(2)}.`,
+    };
+  }
+}
+
+/**
+ * Atomically transitions an OPEN paper limit order to FILLED in PostgreSQL.
+ * Uses Prisma updateMany with `status: 'OPEN'` to guarantee idempotency and prevent duplicate fills.
+ */
+export async function executePaperLimitFill(
+  prismaClient: any,
+  params: {
+    orderId: string;
+    fillPrice: number;
+    fees: number;
+    feeBreakdown?: any;
+    slippageBps?: number;
+    quoteAsOf?: string;
+    quoteSource?: string;
+    sessionName?: string;
+    nowUtc?: Date;
+  }
+): Promise<{ filled: boolean; count: number; reason: string }> {
+  const updateResult = await prismaClient.orderLog.updateMany({
+    where: {
+      id: params.orderId,
+      status: 'OPEN',
+    },
+    data: {
+      status: 'FILLED',
+      price: params.fillPrice,
+      slippage_bps: params.slippageBps ?? 5,
+      fees_inr: params.fees,
+      quote_as_of: params.quoteAsOf || null,
+      response_raw: JSON.stringify({
+        mode: 'PAPER',
+        market_session: params.sessionName || 'REGULAR',
+        quote_source: params.quoteSource || 'live_feed',
+        quote_as_of: params.quoteAsOf || null,
+        fill_price: params.fillPrice,
+        slippage_bps: params.slippageBps ?? 5,
+        fees_inr: params.fees,
+        fee_breakdown: params.feeBreakdown || null,
+        filled_at: (params.nowUtc || new Date()).toISOString(),
+        reason: `Paper LIMIT filled at ₹${params.fillPrice} on limit condition satisfaction.`,
+      }),
+    },
+  });
+
+  if (updateResult.count === 0) {
+    return {
+      filled: false,
+      count: 0,
+      reason: 'Order was already filled or cancelled concurrently (idempotency guard).',
+    };
+  }
+
+  return {
+    filled: true,
+    count: 1,
+    reason: `Order ${params.orderId} filled at ₹${params.fillPrice}.`,
+  };
+}
+
+

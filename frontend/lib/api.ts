@@ -178,7 +178,7 @@ export const api = {
     fetchAPI(`/api/stocks/quote/${symbol}`),
   getAIPicks: () => fetchAPI('/api/stocks/RELIANCE/ai-picks'),
 
-  // Server-Sent Events (SSE) price stream for watchlist / live tickers
+  // Server-Sent Events (SSE) price stream for watchlist / live tickers without token in URL
   subscribePriceStream: (
     symbols: string[],
     onMessage: (data: any) => void,
@@ -191,24 +191,76 @@ export const api = {
       return () => {};
     }
     const symParam = encodeURIComponent(symbols.join(','));
-    const url = `${API_BASE}/api/stocks/stream?symbols=${symParam}&token=${encodeURIComponent(token)}`;
-    const eventSource = new EventSource(url);
+    // Keep session tokens strictly out of URLs (passed via Authorization header & Cookie)
+    const url = `${API_BASE}/api/stocks/stream?symbols=${symParam}`;
+    const controller = new AbortController();
+    let isAborted = false;
 
-    eventSource.onmessage = (event) => {
+    const startStream = async () => {
       try {
-        const payload = JSON.parse(event.data);
-        onMessage(payload);
-      } catch (e) {
-        console.warn('Failed to parse SSE price stream event:', e);
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'text/event-stream',
+            'Authorization': `Bearer ${token}`,
+          },
+          credentials: 'include',
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            if (onError) onError({ code: 'AUTH_EXPIRED', status: 401 });
+            return;
+          }
+          throw new Error(`SSE stream connection failed with HTTP ${res.status}`);
+        }
+
+        const reader = res.body?.getReader();
+        if (!reader) {
+          throw new Error('Response body is not readable');
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (!isAborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const messages = buffer.split('\n\n');
+          buffer = messages.pop() || '';
+
+          for (const msg of messages) {
+            const dataLine = msg.split('\n').find((line) => line.startsWith('data: '));
+            if (dataLine) {
+              try {
+                const payload = JSON.parse(dataLine.slice(6).trim());
+                onMessage(payload);
+              } catch (e) {
+                console.warn('Failed to parse SSE price stream event:', e);
+              }
+            }
+          }
+        }
+      } catch (err: any) {
+        if (isAborted || err.name === 'AbortError') return;
+        if (onError) onError(err);
+        // Auto-reconnect after 3 seconds if not aborted
+        if (!isAborted) {
+          setTimeout(() => {
+            if (!isAborted) startStream();
+          }, 3000);
+        }
       }
     };
 
-    if (onError) {
-      eventSource.onerror = onError;
-    }
+    startStream();
 
     return () => {
-      eventSource.close();
+      isAborted = true;
+      controller.abort();
     };
   },
 

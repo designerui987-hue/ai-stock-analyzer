@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { Bell, Search, Sun, Moon, Command } from 'lucide-react';
 import { CommandPalette } from '@/components/ui/CommandPalette';
+import { evaluateNseSession } from '@/lib/orders/execution';
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
   '/dashboard': { title: 'Dashboard', sub: 'Institutional portfolio performance and AI signals' },
@@ -48,7 +49,78 @@ export default function Header() {
     }
   };
 
-  const marketOpen = true;
+  const [marketStatus, setMarketStatus] = useState<{
+    open: boolean;
+    session: string;
+    label: string;
+    feedStatus: 'LIVE' | 'STANDBY' | 'CLOSED';
+  }>(() => {
+    const s = evaluateNseSession();
+    let label = 'Market Closed';
+    if (s.session === 'REGULAR') label = 'NSE Live';
+    else if (s.session === 'SPECIAL_SESSION') label = 'NSE Special Session';
+    else if (s.session === 'PRE_OPEN') label = 'NSE Pre-Open';
+    else if (s.session === 'POST_CLOSE') label = 'NSE Post-Close';
+    else if (s.session === 'WEEKEND') label = 'NSE Closed · Weekend';
+    else if (s.session === 'HOLIDAY') label = 'NSE Closed · Holiday';
+
+    return {
+      open: s.open,
+      session: s.session,
+      label,
+      feedStatus: s.open ? 'LIVE' : 'CLOSED',
+    };
+  });
+
+  useEffect(() => {
+    const checkMarket = async () => {
+      const s = evaluateNseSession();
+      let label = 'Market Closed';
+      if (s.session === 'REGULAR') label = 'NSE Live';
+      else if (s.session === 'SPECIAL_SESSION') label = 'NSE Special Session';
+      else if (s.session === 'PRE_OPEN') label = 'NSE Pre-Open';
+      else if (s.session === 'POST_CLOSE') label = 'NSE Post-Close';
+      else if (s.session === 'WEEKEND') label = 'NSE Closed · Weekend';
+      else if (s.session === 'HOLIDAY') label = 'NSE Closed · Holiday';
+
+      try {
+        const res = await fetch('/api/market/overview', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.market_session) {
+            const serverSession = data.market_session;
+            const isOpen = Boolean(data.is_market_open);
+            let sLabel = isOpen ? 'NSE Live' : 'Market Closed';
+            if (serverSession === 'PRE_OPEN') sLabel = 'NSE Pre-Open';
+            else if (serverSession === 'WEEKEND') sLabel = 'NSE Closed · Weekend';
+            else if (serverSession === 'HOLIDAY') sLabel = 'NSE Closed · Holiday';
+            else if (serverSession === 'POST_CLOSE') sLabel = 'NSE Post-Close';
+
+            setMarketStatus({
+              open: isOpen,
+              session: serverSession,
+              label: sLabel,
+              feedStatus: isOpen ? 'LIVE' : 'CLOSED',
+            });
+            return;
+          }
+        }
+      } catch {
+        // Fallback to local evaluateNseSession
+      }
+
+      setMarketStatus({
+        open: s.open,
+        session: s.session,
+        label,
+        feedStatus: s.open ? 'LIVE' : 'CLOSED',
+      });
+    };
+
+    checkMarket();
+    const timer = setInterval(checkMarket, 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   return (
     <>
@@ -66,17 +138,23 @@ export default function Header() {
 
           <div
             className={`hidden md:inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-caption font-medium border ${
-              marketOpen
+              marketStatus.open
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
+                : marketStatus.session === 'PRE_OPEN'
+                ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-white/5'
             }`}
           >
             <span
               className={`w-1.5 h-1.5 rounded-full ${
-                marketOpen ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                marketStatus.open
+                  ? 'bg-emerald-500 animate-pulse'
+                  : marketStatus.session === 'PRE_OPEN'
+                  ? 'bg-amber-500 animate-pulse'
+                  : 'bg-slate-400'
               }`}
             />
-            <span>{marketOpen ? 'NSE Live' : 'Market Closed'}</span>
+            <span>{marketStatus.label}</span>
           </div>
         </div>
 

@@ -58,16 +58,22 @@ async def get_stream_user(
     token: Optional[str] = Query(None),
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
 ) -> str:
-    """Authenticate SSE / WebSocket streams via Authorization header or token query param."""
+    """
+    Authenticate SSE / WebSocket streams without leaking session tokens into URLs.
+    Checks Authorization header (Bearer) and HTTP-only / same-site auth_token cookie.
+    Query-param token is supported as legacy fallback only.
+    """
     raw_token = None
-    if credentials:
+    if credentials and credentials.credentials:
         raw_token = credentials.credentials
-    elif token:
-        raw_token = token
     elif "authorization" in request.headers:
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
-            raw_token = auth_header.split(" ", 1)[1]
+            raw_token = auth_header.split(" ", 1)[1].strip()
+    elif "auth_token" in request.cookies:
+        raw_token = request.cookies.get("auth_token")
+    elif token:
+        raw_token = token
 
     if not raw_token:
         raise HTTPException(status_code=401, detail="Authentication token required for streaming")

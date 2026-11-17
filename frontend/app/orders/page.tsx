@@ -247,7 +247,9 @@ export default function OrdersPage() {
                 filteredOrders.map((o) => {
                   const isBuy = o.transaction_type === 'BUY';
                   const st = o.status?.toUpperCase() || 'UNKNOWN';
-                  const needsReconcile = modeTab === 'LIVE' && (st === 'UNKNOWN' || st === 'OPEN' || st === 'PARTIAL');
+                  const needsReconcile =
+                    (modeTab === 'LIVE' && (st === 'UNKNOWN' || st === 'OPEN' || st === 'PARTIAL')) ||
+                    (modeTab === 'PAPER' && st === 'OPEN');
                   return (
                     <tr key={o.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.02] transition-colors">
                       <td className="px-4 py-3 text-slate-500 font-mono text-[11px]">
