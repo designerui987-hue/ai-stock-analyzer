@@ -503,8 +503,8 @@ class MarketDataService:
                 resolved_token = creds.access_token
                 connection_status = "CONNECTED"
 
-        # 2. Hot live WS tick path (always bypasses 10s REST cache!)
-        if user_id:
+        # 2. Hot WS snapshot for display. Explicit refreshes request a new REST observation.
+        if user_id and not skip_cache:
             ws_tick = kite_ws_collector.get_latest_tick(str(user_id), clean_symbol, ex_upper)
             if ws_tick and ws_tick.get("price"):
                 obs_str = ws_tick.get("exchange_timestamp") or ws_tick.get("last_trade_timestamp")

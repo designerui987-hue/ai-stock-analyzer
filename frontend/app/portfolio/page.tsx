@@ -9,17 +9,25 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Sparkline } from '@/components/ui/Sparkline';
 import { formatNumber } from '@/lib/data';
+import { api } from '@/lib/api';
+import { useAuth } from '@/store/useAuth';
 
 interface UserHolding {
   symbol: string;
   name: string;
   qty: number;
   avg_price: number;
-  current_price: number;
+  current_price: number | null;
   sector: string;
 }
 
 export default function PortfolioPage() {
+  const accountId = useAuth((state) => state.user?.id);
+  if (!accountId) return <p role="status">Loading your portfolio…</p>;
+  return <AccountPortfolio key={accountId} storageKey={`portfolio-holdings:${accountId}`} />;
+}
+
+function AccountPortfolio({ storageKey }: { storageKey: string }) {
   const [holdings, setHoldings] = useState<UserHolding[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -35,48 +43,34 @@ export default function PortfolioPage() {
   // Load holdings from localStorage on mount
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('user_portfolio_holdings');
+      const saved = localStorage.getItem(storageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          setHoldings(parsed);
+          const savedHoldings = parsed.map((holding: UserHolding) => ({ ...holding, current_price: null }));
+          setHoldings(savedHoldings);
+          for (const holding of savedHoldings) {
+            void api.getQuoteData(holding.symbol).then((quote) => {
+              if (typeof quote?.price !== 'number' || quote.price <= 0) return;
+              setHoldings((previous) => previous.map((entry) =>
+                entry.symbol === holding.symbol ? { ...entry, current_price: quote.price } : entry
+              ));
+            }).catch(() => {});
+          }
         }
       }
     } catch (e) {
       console.error(e);
     }
     setIsLoaded(true);
-  }, []);
+  }, [storageKey]);
 
   // Sync to localStorage whenever holdings change
   useEffect(() => {
     if (isLoaded) {
-      localStorage.setItem('user_portfolio_holdings', JSON.stringify(holdings));
+      localStorage.setItem(storageKey, JSON.stringify(holdings.map(({ current_price, ...holding }) => holding)));
     }
-  }, [holdings, isLoaded]);
-
-  // Refresh live prices for existing holdings
-  useEffect(() => {
-    if (!isLoaded || holdings.length === 0) return;
-
-    import('@/lib/api').then(({ api }) => {
-      holdings.forEach((h, idx) => {
-        api.getQuoteData(h.symbol)
-          .then((data) => {
-            if (data && data.price) {
-              setHoldings((prev) => {
-                const next = [...prev];
-                if (next[idx]) {
-                  next[idx] = { ...next[idx], current_price: data.price };
-                }
-                return next;
-              });
-            }
-          })
-          .catch(() => {});
-      });
-    });
-  }, [isLoaded]);
+  }, [holdings, isLoaded, storageKey]);
 
   const handleAddHolding = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,14 +95,13 @@ export default function PortfolioPage() {
 
     setLoadingAdd(true);
 
-    let cmp = avgPrice;
+    let cmp: number | null = null;
     let name = sym;
     let sec = sectorInput || 'Equity';
 
     try {
-      const { api } = await import('@/lib/api');
       const quote = await api.getQuoteData(sym).catch(() => null);
-      if (quote && quote.price) {
+      if (typeof quote?.price === 'number' && quote.price > 0) {
         cmp = quote.price;
         name = quote.name || sym;
         sec = quote.sector || sec;
@@ -141,16 +134,17 @@ export default function PortfolioPage() {
 
   // Metrics calculations
   const totalInvested = holdings.reduce((acc, h) => acc + h.qty * h.avg_price, 0);
-  const currentValue = holdings.reduce((acc, h) => acc + h.qty * h.current_price, 0);
+  const hasCompleteQuotes = holdings.every((holding) => holding.current_price !== null);
+  const currentValue = holdings.reduce((acc, h) => acc + h.qty * (h.current_price ?? 0), 0);
   const totalPnL = currentValue - totalInvested;
   const totalPnLPct = totalInvested > 0 ? ((totalPnL / totalInvested) * 100).toFixed(2) : '0.00';
   const isPositive = totalPnL >= 0;
 
   // Sector allocation calculation
   const sectorMap: Record<string, number> = {};
-  if (currentValue > 0) {
+  if (hasCompleteQuotes && currentValue > 0) {
     holdings.forEach((h) => {
-      const val = h.qty * h.current_price;
+      const val = h.qty * (h.current_price ?? 0);
       const sec = h.sector || 'Other';
       sectorMap[sec] = (sectorMap[sec] || 0) + val;
     });
@@ -165,7 +159,7 @@ export default function PortfolioPage() {
             Portfolio Management
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Real-time live holdings tracking, position management, and P&L analysis
+            Manually tracked positions, saved for your account on this browser.
           </p>
         </div>
 
@@ -290,7 +284,7 @@ export default function PortfolioPage() {
           </span>
           <div className="mt-3">
             <span className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-              ₹{formatNumber(currentValue)}
+              {hasCompleteQuotes ? `₹${formatNumber(currentValue)}` : 'Unavailable'}
             </span>
           </div>
         </Card>
@@ -299,17 +293,14 @@ export default function PortfolioPage() {
           <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">
             Total P&L
           </span>
-          <div className="mt-3 flex items-baseline space-x-2">
-            <span
+          <div className="mt-3">
+            {!hasCompleteQuotes ? <span className="text-sm text-slate-500">Unavailable</span> : <span
               className={`text-h2 font-semibold ${
                 isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
               }`}
             >
-              {isPositive ? '+' : ''}₹{formatNumber(Math.abs(totalPnL))}
-            </span>
-            <Badge variant={isPositive ? 'emerald' : 'red'} size="sm">
-              {isPositive ? '+' : ''}{totalPnLPct}%
-            </Badge>
+              {isPositive ? '+' : '−'}₹{formatNumber(Math.abs(totalPnL))}
+            </span>}
           </div>
         </Card>
 
@@ -323,7 +314,7 @@ export default function PortfolioPage() {
                 isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
               }`}
             >
-              {isPositive ? '+' : ''}{totalPnLPct}%
+              {hasCompleteQuotes ? `${isPositive ? '+' : ''}${totalPnLPct}%` : '—'}
             </span>
           </div>
         </Card>
@@ -351,7 +342,7 @@ export default function PortfolioPage() {
                   Your Stock Holdings
                 </h3>
                 <p className="text-caption text-slate-500 dark:text-slate-400">
-                  Real-time position performance & cost basis
+                  Latest available quotes and cost basis
                 </p>
               </div>
               <Button
@@ -372,7 +363,7 @@ export default function PortfolioPage() {
                     No Holdings Added Yet
                   </h4>
                   <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-1">
-                    Click "Add Holding" above to enter your stock positions, quantity, and buy price to track real-time P&L.
+                    Add a position with its quantity and average buy price.
                   </p>
                 </div>
                 <Button
@@ -402,7 +393,7 @@ export default function PortfolioPage() {
                   <tbody>
                     {holdings.map((h) => {
                       const invested = h.qty * h.avg_price;
-                      const curVal = h.qty * h.current_price;
+                      const curVal = h.qty * (h.current_price ?? 0);
                       const pnl = curVal - invested;
                       const pnlPct = invested > 0 ? ((pnl / invested) * 100).toFixed(2) : '0.00';
                       const pos = pnl >= 0;
@@ -423,26 +414,28 @@ export default function PortfolioPage() {
                             ₹{formatNumber(h.avg_price)}
                           </td>
                           <td className="text-right font-semibold">
-                            ₹{formatNumber(h.current_price)}
+                            {h.current_price === null ? 'Unavailable' : `₹${formatNumber(h.current_price)}`}
                           </td>
                           <td className="text-right font-medium text-slate-700 dark:text-slate-300">
                             ₹{formatNumber(invested)}
                           </td>
                           <td className="text-right">
+                            {h.current_price === null ? '—' : <>
                             <div className={`font-semibold ${pos ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-                              {pos ? '+' : ''}₹{formatNumber(Math.abs(pnl))}
+                              {pos ? '+' : '−'}₹{formatNumber(Math.abs(pnl))}
                             </div>
                             <div className="text-[10px]">
                               <Badge variant={pos ? 'emerald' : 'red'} size="sm">
                                 {pos ? '+' : ''}{pnlPct}%
                               </Badge>
                             </div>
+                            </>}
                           </td>
                           <td className="text-right">
                             <button
                               onClick={() => handleRemoveHolding(h.symbol)}
                               className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                              title="Delete Holding"
+                              aria-label={`Delete ${h.symbol} holding`}
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -467,11 +460,11 @@ export default function PortfolioPage() {
                   Sector Breakdown
                 </h3>
               </div>
-              <span className="text-caption text-slate-500">Live Weight</span>
+              <span className="text-caption text-slate-500">Market Value Weight</span>
             </div>
 
             {Object.keys(sectorMap).length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-4">Add holdings to view sector allocation.</p>
+              <p className="text-xs text-slate-400 text-center py-4">{holdings.length ? 'Quotes are required for all holdings.' : 'Add holdings to view sector allocation.'}</p>
             ) : (
               <div className="space-y-3">
                 {Object.entries(sectorMap).map(([sec, val]) => {

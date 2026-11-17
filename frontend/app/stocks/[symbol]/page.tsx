@@ -209,6 +209,7 @@ export default function StockAnalysisPage() {
 
   // Broker Connection & Order Placement Modal State
   const [brokerConnected, setBrokerConnected] = useState(false);
+  const [liveTradingEnabled, setLiveTradingEnabled] = useState(false);
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const [orderProductType, setOrderProductType] = useState<'CNC' | 'MIS'>('CNC');
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
@@ -227,8 +228,9 @@ export default function StockAnalysisPage() {
     fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
       .then((res) => res.json())
       .then((json) => {
-        if (json.success && json.connected) {
-          setBrokerConnected(true);
+        if (json.success) {
+          setBrokerConnected(json.connected === true && json.connection?.broker === 'KITE');
+          setLiveTradingEnabled(json.live_trading_enabled === true);
         }
       })
       .catch((e) => console.error(e));
@@ -279,11 +281,7 @@ export default function StockAnalysisPage() {
         setOrderIdempotencyKey(
           typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `ord_${Date.now()}`
         );
-        setTimeout(() => {
-          setIsOrderModalOpen(false);
-          setOrderSuccessMsg(null);
-          setConfirmLiveTicket(false);
-        }, 2000);
+        setConfirmLiveTicket(false);
       }
     } catch (e: any) {
       setOrderError(e.message || 'Network error executing order');
@@ -753,15 +751,22 @@ export default function StockAnalysisPage() {
                     <Button
                       variant={ai.signal === 'BUY' ? 'primary' : 'secondary'}
                       size="md"
-                      onClick={() => setIsOrderModalOpen(true)}
+                      onClick={() => {
+                        setOrderError(null);
+                        setOrderSuccessMsg(null);
+                        setOrderMode('PAPER');
+                        setLiveOptIn(false);
+                        setConfirmLiveTicket(false);
+                        setIsOrderModalOpen(true);
+                      }}
                       className={`w-full justify-center text-xs font-semibold ${
                         ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700 !text-white'
                       }`}
                     >
-                      ⚡ Execute {ai.signal} Strategy on Upstox / Kite / Angel One ({sizingResult.position_size_shares} Shares)
+                      Review {ai.signal} order · {sizingResult.position_size_shares} shares
                     </Button>
                     <p className="text-[10px] text-center text-slate-500 font-medium">
-                      🎯 Optimized live trade parameters for Upstox, Zerodha Kite & Angel One
+                      Paper trading is selected by default.
                     </p>
                   </div>
 
@@ -859,7 +864,8 @@ export default function StockAnalysisPage() {
                       <button
                         type="button"
                         onClick={() => setOrderMode('LIVE')}
-                        className={`p-2.5 rounded-lg border text-left transition-all ${
+                        disabled={!liveTradingEnabled || !brokerConnected}
+                        className={`p-2.5 rounded-lg border text-left transition-all disabled:opacity-60 ${
                           orderMode === 'LIVE'
                             ? 'border-amber-600 bg-amber-50/60 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-1 ring-amber-600'
                             : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
@@ -869,7 +875,9 @@ export default function StockAnalysisPage() {
                           <span className="font-bold text-xs">⚡ Live Kite Trading</span>
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 font-medium">Opt-in</span>
                         </div>
-                        <p className="text-[10px] text-slate-500 mt-0.5">Routes to Zerodha Kite with real capital</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{!liveTradingEnabled
+                            ? 'Real-money trading is disabled.'
+                            : !brokerConnected ? 'Connect Zerodha Kite in Settings.' : 'Uses real funds through Zerodha Kite.'}</p>
                       </button>
                     </div>
 
@@ -958,13 +966,14 @@ export default function StockAnalysisPage() {
                   {/* Error / Success Feedback */}
                   {orderError && (
                     <div className="p-2.5 bg-red-500/10 border border-red-500/20 rounded text-xs text-red-600 dark:text-red-400 font-medium">
-                      ❌ {orderError}
+                      {orderError}
                     </div>
                   )}
 
                   {orderSuccessMsg && (
                     <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                      {orderSuccessMsg}
+                      {orderSuccessMsg}{' '}
+                      <Link href="/orders" className="font-semibold underline">View orders</Link>
                     </div>
                   )}
 
@@ -976,14 +985,14 @@ export default function StockAnalysisPage() {
                       onClick={() => setIsOrderModalOpen(false)}
                       disabled={orderSubmitting}
                     >
-                      Cancel
+                      {orderSuccessMsg ? 'Close' : 'Cancel'}
                     </Button>
 
                     <Button
                       variant="primary"
                       size="md"
                       onClick={handleExecuteOrder}
-                      disabled={orderSubmitting || (orderMode === 'LIVE' && (!liveOptIn || !confirmLiveTicket))}
+                      disabled={orderSubmitting || Boolean(orderSuccessMsg) || (orderMode === 'LIVE' && (!liveOptIn || !confirmLiveTicket))}
                       className={ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700'}
                     >
                       {orderSubmitting

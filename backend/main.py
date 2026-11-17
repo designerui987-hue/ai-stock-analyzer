@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 from api import stocks, portfolio, assistant, alerts, market, auth, fundamentals, data_sources
 from config import settings
 from db.session import init_db
+from services.paper_order_worker import PaperOrderWorker
 
 
 @asynccontextmanager
@@ -12,8 +14,17 @@ async def lifespan(app: FastAPI):
     print(f"Live data: {'Enabled' if settings.has_live_data else 'Demo mode'}")
     print(f"CORS origins: {settings.cors_origin_list}")
     init_db()
-    yield
-    print("Shutting down...")
+    paper_worker = None
+    if settings.kite_ws_enabled and settings.paper_order_evaluation_url:
+        worker = PaperOrderWorker(settings.paper_order_evaluation_url, settings.cron_secret or "")
+        paper_worker = asyncio.create_task(worker.run())
+    try:
+        yield
+    finally:
+        if paper_worker:
+            paper_worker.cancel()
+            await asyncio.gather(paper_worker, return_exceptions=True)
+        print("Shutting down...")
 
 
 app = FastAPI(
@@ -53,6 +64,7 @@ async def health():
     from services.nse_calendar import get_market_session
 
     ws_health = kite_ws_collector.get_health_summary()
+    ws_health.pop("connection_states", None)
     return {
         "status": "healthy",
         "live_data": bool(ws_health["active_connections"] > 0),

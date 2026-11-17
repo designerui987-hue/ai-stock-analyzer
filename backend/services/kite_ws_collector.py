@@ -15,6 +15,7 @@ Architecture & Guarantees:
 
 import asyncio
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 import logging
 import struct
@@ -358,22 +359,32 @@ class KiteWebSocketCollector:
         tokens: List[int],
         mode: str = "full",
         on_token_expired: Optional[Callable[[str], None]] = None,
+        subscription: str = "watchlist",
     ) -> Tuple[bool, Optional[str]]:
         """Start or update an authenticated persistent Kite WebSocket collector task for a user."""
-        ok, err = self.can_subscribe_tokens(tokens)
-        if not ok:
-            return False, err
-
         uid = str(user_id)
+        credentials = sha256(f"{api_key}:{access_token}".encode()).digest()
         with self._lock:
             existing = self._tasks.get(uid)
-            if existing and not existing.done():
-                self._connections[uid]["tokens"] = list(tokens)
+            meta = self._connections.get(uid, {})
+            groups = dict(meta.get("subscriptions", {}))
+            groups[subscription] = set(tokens)
+            desired_tokens = set().union(*groups.values())
+            ok, err = self.can_subscribe_tokens(desired_tokens)
+            if not ok:
+                return False, err
+            if existing and not existing.done() and meta.get("credentials") == credentials:
+                meta["subscriptions"] = groups
+                meta["tokens"] = desired_tokens
                 return True, None
+            if existing and not existing.done():
+                existing.cancel()
 
             self._connections[uid] = {
                 "state": "CONNECTING",
-                "tokens": list(tokens),
+                "tokens": desired_tokens,
+                "subscriptions": groups,
+                "credentials": credentials,
                 "mode": mode,
                 "last_heartbeat": time.monotonic(),
                 "error": None,
@@ -383,6 +394,18 @@ class KiteWebSocketCollector:
             )
             self._tasks[uid] = task
         return True, None
+
+    async def release_subscription(self, user_id: str, subscription: str) -> None:
+        uid = str(user_id)
+        with self._lock:
+            meta = self._connections.get(uid)
+            if not meta or subscription not in meta["subscriptions"]:
+                return
+            del meta["subscriptions"][subscription]
+            meta["tokens"] = set().union(*meta["subscriptions"].values())
+            if meta["tokens"]:
+                return
+        await self.stop_user_collector(uid)
 
     async def stop_user_collector(self, user_id: str) -> None:
         uid = str(user_id)
@@ -413,7 +436,6 @@ class KiteWebSocketCollector:
                 meta = self._connections.get(user_id)
                 if not meta or meta["state"] in ("DISCONNECTED", "TOKEN_EXPIRED"):
                     return
-                tokens = list(meta["tokens"])
 
             try:
                 async with websockets.connect(
@@ -428,11 +450,18 @@ class KiteWebSocketCollector:
                         self._connections[user_id]["last_heartbeat"] = time.monotonic()
                     backoff = 1.0
 
-                    if tokens:
-                        await ws.send(json.dumps({"a": "subscribe", "v": tokens}))
-                        await ws.send(json.dumps({"a": "mode", "v": [mode, tokens]}))
-
+                    subscribed = set()
                     while True:
+                        with self._lock:
+                            desired = set(self._connections[user_id]["tokens"])
+                        removed = sorted(subscribed - desired)
+                        added = sorted(desired - subscribed)
+                        if removed:
+                            await ws.send(json.dumps({"a": "unsubscribe", "v": removed}))
+                        if added:
+                            await ws.send(json.dumps({"a": "subscribe", "v": added}))
+                            await ws.send(json.dumps({"a": "mode", "v": [mode, added]}))
+                        subscribed = desired
                         msg = await asyncio.wait_for(ws.recv(), timeout=HEARTBEAT_TIMEOUT_SECONDS)
                         with self._lock:
                             self._connections[user_id]["last_heartbeat"] = time.monotonic()

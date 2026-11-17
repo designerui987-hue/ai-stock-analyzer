@@ -67,8 +67,11 @@ export default function LoginPage() {
       const ok = await login(email, password);
       if (ok) {
         const searchParams = new URLSearchParams(window.location.search);
-        const nextUrl = searchParams.get('next') || '/dashboard';
-        router.push(nextUrl);
+        const next = new URL(searchParams.get('next') || '/dashboard', window.location.origin);
+        const target = next.origin === window.location.origin && !next.pathname.startsWith('//')
+          ? next.pathname + next.search + next.hash
+          : '/dashboard';
+        router.push(target);
       } else {
         setError('Invalid email or password.');
       }
@@ -117,7 +120,7 @@ export default function LoginPage() {
               Invest Smarter with AI-Powered Market Intelligence
             </h1>
             <p className="text-body text-slate-600 dark:text-[#CBD5E1]">
-              Institutional-grade multi-model ensemble analytics, real-time NIFTY telemetry, and automated portfolio rebalancing.
+              Research NSE equities, track your watchlist, and practice trades with a simulated order ledger.
             </p>
           </div>
         </div>
@@ -133,7 +136,7 @@ export default function LoginPage() {
                 AI Stock Analysis
               </h3>
               <p className="text-caption text-slate-500 dark:text-[#64748B] mt-0.5">
-                Multi-model predictions (XGBoost, Neural Net, LightGBM) with confidence ratings.
+                See how market indicators contribute to each rule-based signal.
               </p>
             </div>
           </div>

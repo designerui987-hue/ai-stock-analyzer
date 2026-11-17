@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     research_rate_limit_per_minute: int = 30
     kite_ws_enabled: bool = False
     feed_quote_max_age_seconds: int = 60
+    paper_order_evaluation_url: Optional[str] = None
+    cron_secret: Optional[str] = None
 
     # Database
     database_url: str = "sqlite:///./ai_stock.db"

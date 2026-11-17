@@ -57,8 +57,13 @@ export default function DashboardPage() {
   // Watchlist & quote state
   const [watchlistSymbols, setWatchlistSymbols] = React.useState<string[]>(DEFAULT_WATCHLIST);
   const [watchlistQuotes, setWatchlistQuotes] = React.useState<Record<string, any>>({});
-  const [streamStatus, setStreamStatus] = React.useState<string>('CONNECTING');
-  const [lastStreamUpdate, setLastStreamUpdate] = React.useState<string | null>(null);
+  const [transportStatus, setTransportStatus] = React.useState('CONNECTING');
+  const [clock, setClock] = React.useState(Date.now);
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 5_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Portfolio & Paper ledger state
   const [portfolio, setPortfolio] = React.useState<any>(null);
@@ -188,28 +193,13 @@ export default function DashboardPage() {
         (payload: Record<string, any>) => {
           if (!isMounted || !payload || typeof payload !== 'object') return;
           setWatchlistQuotes((prev) => ({ ...prev, ...payload }));
-          setLastStreamUpdate(new Date().toISOString());
-
-          const firstEntry = Object.values(payload)[0];
-          // "Live" strictly requires a connected feed with verified real-time tick freshness
-          if (firstEntry?.connection_status === 'CONNECTED' && firstEntry?.freshness === 'LIVE') {
-            setStreamStatus('LIVE');
-          } else if (firstEntry?.freshness === 'STALE') {
-            setStreamStatus('STALE');
-          } else if (firstEntry?.freshness === 'DELAYED') {
-            setStreamStatus('DELAYED');
-          } else if (firstEntry?.freshness === 'UNAVAILABLE' || firstEntry?.status === 'unavailable') {
-            setStreamStatus('UNAVAILABLE');
-          } else if (firstEntry?.freshness) {
-            setStreamStatus(firstEntry.freshness);
-          } else {
-            setStreamStatus('CONNECTED');
-          }
+          setClock(Date.now());
+          setTransportStatus('CONNECTED');
 
           // Update active selected stock chart if live tick arrives
           const activeTick = payload[selectedSymbol];
-          if (activeTick && typeof activeTick.price === 'number' && activeTick.price > 0) {
-            const tickDate = (activeTick.as_of || new Date().toISOString()).slice(0, 10);
+          if (activeTick?.as_of && typeof activeTick.price === 'number' && activeTick.price > 0) {
+            const tickDate = activeTick.as_of.slice(0, 10);
             setChartData((prev) => {
               if (prev.length === 0) return prev;
               const next = [...prev];
@@ -225,11 +215,13 @@ export default function DashboardPage() {
         },
         (err: any) => {
           if (!isMounted) return;
-          setStreamStatus(err?.code === 'AUTH_REQUIRED' ? 'AUTH_REQUIRED' : 'RECONNECTING');
+          setTransportStatus(
+            err?.code === 'AUTH_REQUIRED' || err?.code === 'AUTH_EXPIRED' ? err.code : 'RECONNECTING'
+          );
         }
       );
     } else {
-      setStreamStatus(authed ? 'STANDBY' : 'AUTH_REQUIRED');
+      setTransportStatus(authed ? 'STANDBY' : 'AUTH_REQUIRED');
     }
 
     return () => {
@@ -251,6 +243,17 @@ export default function DashboardPage() {
   const hasPortfolioData = portfolio && portfolio.status !== 'unavailable' && typeof portfolio.current_value === 'number';
   const totalPnlPositive = (portfolio?.total_pnl ?? 0) >= 0;
   const activeQuote = watchlistQuotes[selectedSymbol];
+  const observedAt = activeQuote?.exchange_timestamp || activeQuote?.as_of;
+  const observationAge = clock - Date.parse(observedAt || '');
+  const canShowLive = transportStatus === 'CONNECTED' &&
+    activeQuote?.connection_status === 'CONNECTED' && activeQuote?.freshness === 'LIVE' &&
+    observationAge >= -15_000 && observationAge <= 60_000;
+  const quoteFreshness = canShowLive
+    ? 'LIVE'
+    : activeQuote?.freshness === 'LIVE'
+      ? 'STALE'
+      : activeQuote?.freshness || 'UNAVAILABLE';
+  const streamStatus = transportStatus === 'CONNECTED' ? quoteFreshness : transportStatus;
   const activePriceAvailable = activeQuote && activeQuote.status !== 'unavailable' && typeof activeQuote.price === 'number';
   const activeChangePct = activeQuote?.change_percent ?? 0;
   const isUp = activeChangePct >= 0;
@@ -307,10 +310,10 @@ export default function DashboardPage() {
                     : ''
                 }
               >
-                {streamStatus}
+                {streamStatus.replaceAll('_', ' ')}
               </strong>
             </span>
-            {lastStreamUpdate && <span>• Last tick {formatIst(lastStreamUpdate)}</span>}
+            {observedAt && <span>• Quote as of {formatIst(observedAt)}</span>}
           </div>
         </div>
 
@@ -373,9 +376,9 @@ export default function DashboardPage() {
                 NSE Equity
               </Badge>
               <FreshnessBadge
-                status={activeQuote?.freshness || 'DELAYED'}
-                asOf={activeQuote?.as_of}
-                source={activeQuote?.source || 'yfinance'}
+                status={quoteFreshness}
+                asOf={observedAt}
+                source={activeQuote?.source ?? null}
               />
             </div>
             <div className="mt-1 flex items-baseline space-x-3">
@@ -477,7 +480,7 @@ export default function DashboardPage() {
               >
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-xs text-slate-900 dark:text-slate-100">{sym}</span>
-                  <FreshnessBadge status={q?.freshness || 'DELAYED'} asOf={q?.as_of} source={q?.source} />
+                  <FreshnessBadge status={q?.freshness || 'UNAVAILABLE'} asOf={q?.as_of} source={q?.source ?? null} />
                 </div>
                 <div className="mt-1.5 flex items-baseline justify-between">
                   <span className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">

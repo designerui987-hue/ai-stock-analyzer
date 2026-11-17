@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -55,13 +55,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 async def get_stream_user(
     request: Request,
-    token: Optional[str] = Query(None),
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
 ) -> str:
     """
     Authenticate SSE / WebSocket streams without leaking session tokens into URLs.
-    Checks Authorization header (Bearer) and HTTP-only / same-site auth_token cookie.
-    Query-param token is supported as legacy fallback only.
+    Checks the Authorization header and the same-site auth cookie.
     """
     raw_token = None
     if credentials and credentials.credentials:
@@ -72,9 +70,6 @@ async def get_stream_user(
             raw_token = auth_header.split(" ", 1)[1].strip()
     elif "auth_token" in request.cookies:
         raw_token = request.cookies.get("auth_token")
-    elif token:
-        raw_token = token
-
     if not raw_token:
         raise HTTPException(status_code=401, detail="Authentication token required for streaming")
     return decode_jwt_token(raw_token)

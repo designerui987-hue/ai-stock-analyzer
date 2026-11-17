@@ -12,8 +12,6 @@ import {
   evaluateNseSession,
   validateQuoteForOrder,
   simulatePaperExecution,
-  checkPaperLimitSatisfaction,
-  executePaperLimitFill,
   ServerQuotePayload,
 } from '@/lib/orders/execution';
 import { z } from 'zod';
@@ -41,6 +39,7 @@ const OrderPostSchema = z.object({
 
 const OrderReconcileSchema = z.object({
   order_id: z.string().min(1),
+  action: z.enum(['reconcile', 'cancel']).default('reconcile'),
 });
 
 function normalizeStatus(st: OrderStatus | string): string {
@@ -214,6 +213,20 @@ export async function POST(req: Request) {
       );
     }
 
+    const sessionInfo = evaluateNseSession();
+    if (mode === 'PAPER' && (order_type === 'SL' || order_type === 'SL_M')) {
+      return NextResponse.json(
+        { success: false, error: 'Paper trading supports market and limit orders.' },
+        { status: 400 }
+      );
+    }
+    if (mode === 'PAPER' && order_type === 'MARKET' && !sessionInfo.open) {
+      return NextResponse.json(
+        { success: false, error: 'Paper market orders require an open trading session.' },
+        { status: 409 }
+      );
+    }
+
     // 4. Fetch fresh server-side quote (skip_cache=true) and verify freshness
     const rawQuote = await fetchServerQuote(sym, exch, req.headers.get('authorization'));
     const maxAgeSeconds = Number(process.env.FEED_QUOTE_MAX_AGE_SECONDS || '60');
@@ -248,8 +261,6 @@ export async function POST(req: Request) {
         );
       }
     }
-
-    const sessionInfo = evaluateNseSession();
 
     // 6. Paper Trading Simulation Path (strictly isolated ledger)
     if (mode === 'PAPER') {
@@ -560,7 +571,7 @@ export async function POST(req: Request) {
 export async function PATCH(req: Request) {
   try {
     const userId = getVerifiedUserId(req);
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
     const parsed = OrderReconcileSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: 'Invalid reconcile payload.' }, { status: 400 });
@@ -573,56 +584,33 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ success: false, error: 'Order not found.' }, { status: 404 });
     }
 
-    if ((order as any).mode !== 'LIVE' || order.broker !== 'KITE') {
-      if (order.status !== 'OPEN') {
+    const isPaper = order.mode === 'PAPER' && order.broker === 'PAPER';
+    if (parsed.data.action === 'cancel') {
+      if (!isPaper) {
+        return NextResponse.json({ success: false, error: 'Only simulated orders can be cancelled here.' }, { status: 400 });
+      }
+      if (order.status === 'CANCELLED') {
         return NextResponse.json({
           success: true,
           order,
-          message: `Paper order is already in final state: ${order.status}`,
+          message: 'Paper order already cancelled.',
         });
       }
-
-      // Evaluate resting paper limit order against current fresh quote
-      const exch = ((order as any).exchange || 'NSE') as 'NSE' | 'BSE';
-      const quote = await fetchServerQuote(order.symbol, exch, req.headers.get('authorization'));
-      const satisfaction = checkPaperLimitSatisfaction({
-        order: {
-          id: order.id,
-          symbol: order.symbol,
-          exchange: exch,
-          transaction_type: order.transaction_type as any,
-          quantity: order.quantity,
-          order_type: order.order_type,
-          product_type: order.product_type,
-          price: order.price,
-        },
-        quote,
+      const result = await prisma.orderLog.updateMany({
+        where: { id: order.id, user_id: userId, mode: 'PAPER', broker: 'PAPER', status: 'OPEN' },
+        data: { status: 'CANCELLED' },
       });
-
-      if (satisfaction.satisfied && satisfaction.fillPrice && satisfaction.fees !== undefined) {
-        await executePaperLimitFill(prisma, {
-          orderId: order.id,
-          fillPrice: satisfaction.fillPrice,
-          fees: satisfaction.fees,
-          feeBreakdown: satisfaction.feeBreakdown,
-          quoteAsOf: satisfaction.quoteAsOf,
-          quoteSource: satisfaction.quoteSource,
-          sessionName: satisfaction.sessionName,
-        });
-
-        const refreshed = await prisma.orderLog.findUnique({ where: { id: order.id } });
-        return NextResponse.json({
-          success: true,
-          order: refreshed,
-          message: satisfaction.reason,
-        });
+      if (result.count === 1) {
+        return NextResponse.json({ success: true, message: 'Paper order cancelled.' });
       }
-
-      return NextResponse.json({
-        success: true,
-        order,
-        message: satisfaction.reason,
-      });
+      const latest = await prisma.orderLog.findFirst({ where: { id: order.id, user_id: userId } });
+      if (latest?.status === 'CANCELLED') {
+        return NextResponse.json({ success: true, message: 'Paper order already cancelled.' });
+      }
+      return NextResponse.json({ success: false, error: 'The order is no longer open. Refresh its status.' }, { status: 409 });
+    }
+    if (order.mode !== 'LIVE' || order.broker !== 'KITE') {
+      return NextResponse.json({ success: true, order, message: `Paper order status: ${order.status}.` });
     }
 
     const conn = await prisma.brokerConnection.findUnique({

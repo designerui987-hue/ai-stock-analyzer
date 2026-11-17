@@ -32,7 +32,11 @@ Built with **Next.js 15 (App Router, React 18, TypeScript)**, **FastAPI (Python 
 ### Prerequisites
 * Node.js 20+
 * Python 3.12+
-* PostgreSQL & Redis (optional, in-memory cache active by default)
+* PostgreSQL for the application workflows. Redis is optional for local development.
+
+Copy `backend/.env.example` to `backend/.env`. Set `DATABASE_URL` to your PostgreSQL database and provide local values for `SECRET_KEY`, `TOKEN_ENCRYPTION_SECRET`, and `CRON_SECRET`. Create `frontend/.env` with the same four values, `NEXT_PUBLIC_API_URL=http://localhost:8000`, and `ENABLE_LIVE_TRADING=false`.
+
+For automatic paper limit fills, configure the Kite keys in both apps and connect Zerodha in Settings. The backend uses `ZERODHA_API_KEY` and `ZERODHA_API_SECRET`, while the frontend uses `KITE_API_KEY` and `KITE_API_SECRET`. Set `KITE_WS_ENABLED=true` and `PAPER_ORDER_EVALUATION_URL=http://localhost:3000/api/broker/orders/evaluate` in `backend/.env`. Resting orders require a valid Kite session to receive new trades.
 
 ### 1. Backend Setup
 ```bash
@@ -51,8 +55,9 @@ API Documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
 ### 2. Frontend Setup
 ```bash
 cd frontend
-npm install
+npm ci
 npx prisma generate
+npm run db:setup
 npm run dev
 ```
 Web Interface: [http://localhost:3000](http://localhost:3000)
@@ -61,7 +66,7 @@ Web Interface: [http://localhost:3000](http://localhost:3000)
 
 ## 🧪 Running the Test Suites
 
-### Backend Unit Tests (Pytest — 28 Tests)
+### Backend Unit Tests
 ```bash
 cd backend
 .\.venv\Scripts\pytest -v
@@ -71,8 +76,7 @@ cd backend
 ```bash
 cd frontend
 npx tsc --noEmit
-npx tsx lib/signal-resolution.test.ts
-npx tsx lib/auth-lockdown.test.ts
+npm test
 npm run build
 ```
 

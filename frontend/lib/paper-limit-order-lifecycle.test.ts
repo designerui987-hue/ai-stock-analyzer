@@ -175,6 +175,9 @@ async function runPaperLimitLifecycleTests() {
     constructor() {
       this.orders.set('ord-buy-001', {
         id: 'ord-buy-001',
+        user_id: 'paper-test-a',
+        mode: 'PAPER',
+        broker: 'PAPER',
         symbol: 'RELIANCE',
         exchange: 'NSE',
         transaction_type: 'BUY',
@@ -186,11 +189,17 @@ async function runPaperLimitLifecycleTests() {
         fees_inr: 0,
         placed_at: new Date(REGULAR_SESSION_DATE.getTime() - 5000),
       });
+      this.orders.set('ord-other-user', {
+        ...this.orders.get('ord-buy-001'),
+        id: 'ord-other-user',
+        user_id: 'paper-test-b',
+      });
     }
 
     async findMany(query?: any) {
       const all = Array.from(this.orders.values());
       return all.filter((o) => {
+        if (query?.where?.user_id && o.user_id !== query.where.user_id) return false;
         if (query?.where?.symbol && o.symbol !== query.where.symbol) return false;
         if (query?.where?.exchange && o.exchange !== query.where.exchange) return false;
         if (query?.where?.status && o.status !== query.where.status) return false;
@@ -200,9 +209,9 @@ async function runPaperLimitLifecycleTests() {
       });
     }
 
-    async updateMany(query: { where: { id: string; status: string }; data: any }) {
+    async updateMany(query: { where: Record<string, string>; data: any }) {
       const order = this.orders.get(query.where.id);
-      if (!order || order.status !== query.where.status) {
+      if (!order || !Object.entries(query.where).every(([key, value]) => order[key] === value)) {
         return { count: 0 };
       }
       order.status = query.data.status;
@@ -217,6 +226,7 @@ async function runPaperLimitLifecycleTests() {
   // First fill execution
   const fill1 = await executePaperLimitFill(mockPrisma, {
     orderId: 'ord-buy-001',
+    userId: 'paper-test-a',
     fillPrice: 2491.25,
     fees: 14.95,
     sessionName: 'REGULAR',
@@ -228,6 +238,7 @@ async function runPaperLimitLifecycleTests() {
   // Duplicate / repeat quote event / overlapping worker fill execution
   const fill2 = await executePaperLimitFill(mockPrisma, {
     orderId: 'ord-buy-001',
+    userId: 'paper-test-a',
     fillPrice: 2491.25,
     fees: 14.95,
     sessionName: 'REGULAR',
@@ -329,6 +340,7 @@ async function runPaperLimitLifecycleTests() {
   };
   const evalResult = await evaluateRestingPaperOrdersWithQuote(
     blotterPrisma,
+    'paper-test-a',
     dipQuote,
     new Date(REGULAR_SESSION_DATE.getTime() + 10_000)
   );
@@ -339,6 +351,7 @@ async function runPaperLimitLifecycleTests() {
   const finalOrder = (blotterOrderLog as any).orders.get('ord-buy-001');
   assert.strictEqual(finalOrder.status, 'FILLED', 'Order must already be FILLED when blotter is opened');
   assert.ok(finalOrder.price <= 2500, 'Fill price must respect buy limit price');
+  assert.strictEqual(blotterOrderLog.orders.get('ord-other-user').status, 'OPEN');
   console.log('✓ Limit crossing occurring and reversing before blotter opened is already FILLED');
 
   console.log('All Paper Limit Order Lifecycle Tests Passed successfully!');

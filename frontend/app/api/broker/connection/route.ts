@@ -16,10 +16,12 @@ export async function GET(req: Request) {
       where: { user_id: userId },
     });
 
+    const liveTradingEnabled = process.env.ENABLE_LIVE_TRADING === 'true';
     if (!conn) {
       return NextResponse.json({
         success: true,
         connected: false,
+        live_trading_enabled: liveTradingEnabled,
         status: 'DISCONNECTED',
       });
     }
@@ -31,6 +33,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       success: true,
       connected: currentStatus === 'CONNECTED',
+      live_trading_enabled: liveTradingEnabled,
       connection: {
         broker: conn.broker,
         status: currentStatus,

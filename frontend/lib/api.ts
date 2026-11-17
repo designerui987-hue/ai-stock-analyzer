@@ -90,12 +90,13 @@ export async function fetchAPI(endpoint: string, options?: RequestInit) {
   }
 
   try {
-    const res = await fetch(`${API_BASE}${endpoint}`, {
+    const baseUrl = /^\/api\/watchlist(?:\?|$)/.test(endpoint) ? '' : API_BASE;
+    const res = await fetch(`${baseUrl}${endpoint}`, {
       ...options,
       headers,
     });
 
-    if (res.status === 401) {
+    if (res.status === 401 && token && !endpoint.startsWith('/api/auth/')) {
       // Token expired or invalid
       auth.removeToken();
       if (typeof window !== 'undefined') {
@@ -110,6 +111,8 @@ export async function fetchAPI(endpoint: string, options?: RequestInit) {
         const errorJson = await res.clone().json();
         if (errorJson?.detail) {
           errorMsg = typeof errorJson.detail === 'string' ? errorJson.detail : JSON.stringify(errorJson.detail);
+        } else if (typeof errorJson?.error === 'string') {
+          errorMsg = errorJson.error;
         }
       } catch {
         const errorText = await res.text().catch(() => '');
@@ -174,8 +177,8 @@ export const api = {
   getStockAnalysis: (symbol: string) => fetchAPI(`/api/stocks/${symbol}`),
   getChartData: (symbol: string, period: string = '1Y') =>
     fetchAPI(`/api/stocks/${symbol}/chart?period=${period}`),
-  getQuoteData: (symbol: string) =>
-    fetchAPI(`/api/stocks/quote/${symbol}`),
+  getQuoteData: (symbol: string, exchange = 'NSE') =>
+    fetchAPI(`/api/stocks/quote/${encodeURIComponent(symbol)}?exchange=${encodeURIComponent(exchange)}`),
   getAIPicks: () => fetchAPI('/api/stocks/RELIANCE/ai-picks'),
 
   // Server-Sent Events (SSE) price stream for watchlist / live tickers without token in URL
@@ -211,10 +214,7 @@ export const api = {
       if (isCleanedUp) return;
       cancelPendingRetry();
       retryAttempt++;
-      // Bounded exponential backoff with jitter: 1s, 2s, 4s, 8s, up to 15s max
-      const expDelay = Math.min(MAX_RETRY_DELAY_MS, INITIAL_RETRY_DELAY_MS * Math.pow(2, retryAttempt - 1));
-      const jitter = Math.floor(Math.random() * 500);
-      const delay = expDelay + jitter;
+      const delay = Math.min(MAX_RETRY_DELAY_MS, INITIAL_RETRY_DELAY_MS * Math.pow(2, retryAttempt - 1));
 
       if (onError) {
         onError({
@@ -272,9 +272,6 @@ export const api = {
 
         const decoder = new TextDecoder();
         let buffer = '';
-        // Reset retry backoff on successful connection
-        retryAttempt = 0;
-
         while (!isCleanedUp && activeController === controller) {
           const { done, value } = await reader.read();
           if (done) {
@@ -294,6 +291,7 @@ export const api = {
             if (dataLine) {
               try {
                 const payload = JSON.parse(dataLine.slice(6).trim());
+                retryAttempt = 0;
                 onMessage(payload);
               } catch (e) {
                 console.warn('Failed to parse SSE price stream event:', e);

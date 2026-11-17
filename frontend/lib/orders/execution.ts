@@ -11,6 +11,7 @@ export interface ServerQuotePayload {
   source?: string;
   as_of?: string | null;
   exchange_timestamp?: string | null;
+  last_trade_timestamp?: string | null;
   reason?: string;
 }
 
@@ -137,7 +138,7 @@ export function validateQuoteForOrder(
     };
   }
 
-  const obsTimeStr = quote.exchange_timestamp || quote.as_of;
+  const obsTimeStr = quote.last_trade_timestamp || quote.exchange_timestamp || quote.as_of;
   if (!obsTimeStr) {
     return { valid: false, reason: 'Quote missing exchange observation timestamp (`as_of`).' };
   }
@@ -150,8 +151,13 @@ export function validateQuoteForOrder(
   const maxClockSkewMs = (opts.maxClockSkewSeconds ?? 15) * 1000; // 15s clock skew tolerance
 
   // Reject future timestamps outside clock-skew tolerance
-  if (obsMs > nowMs + maxClockSkewMs) {
-    const aheadSeconds = Math.round((obsMs - nowMs) / 1000);
+  const exchangeMs = quote.exchange_timestamp ? Date.parse(quote.exchange_timestamp) : obsMs;
+  if (Number.isNaN(exchangeMs)) {
+    return { valid: false, reason: 'Unparseable exchange timestamp.' };
+  }
+  const latestObservedMs = Math.max(obsMs, exchangeMs);
+  if (latestObservedMs > nowMs + maxClockSkewMs) {
+    const aheadSeconds = Math.round((latestObservedMs - nowMs) / 1000);
     return {
       valid: false,
       reason: `Future quote timestamp outside clock-skew tolerance (${aheadSeconds}s ahead > max ${opts.maxClockSkewSeconds ?? 15}s).`,
@@ -489,6 +495,7 @@ export async function executePaperLimitFill(
   prismaClient: any,
   params: {
     orderId: string;
+    userId: string;
     fillPrice: number;
     fees: number;
     feeBreakdown?: any;
@@ -502,6 +509,10 @@ export async function executePaperLimitFill(
   const updateResult = await prismaClient.orderLog.updateMany({
     where: {
       id: params.orderId,
+      user_id: params.userId,
+      mode: 'PAPER',
+      broker: 'PAPER',
+      order_type: 'LIMIT',
       status: 'OPEN',
     },
     data: {
@@ -547,16 +558,21 @@ export async function executePaperLimitFill(
  */
 export async function evaluateRestingPaperOrdersWithQuote(
   prismaClient: any,
+  userId: string,
   quote: ServerQuotePayload,
   nowUtc?: Date
 ): Promise<{ evaluated: number; filled: number; results: Array<{ orderId: string; status: string; reason: string }> }> {
   const quoteSym = (quote.symbol || '').trim().toUpperCase();
-  const quoteExch = (quote.exchange || 'NSE').trim().toUpperCase();
-  if (!quoteSym) return { evaluated: 0, filled: 0, results: [] };
+  const quoteExch = (quote.exchange || '').trim().toUpperCase();
+  if (!quoteSym || !['NSE', 'BSE'].includes(quoteExch)) {
+    return { evaluated: 0, filled: 0, results: [] };
+  }
 
   const openOrders = await prismaClient.orderLog.findMany({
     where: {
+      user_id: userId,
       mode: 'PAPER',
+      broker: 'PAPER',
       status: 'OPEN',
       symbol: quoteSym,
       exchange: quoteExch,
@@ -587,6 +603,7 @@ export async function evaluateRestingPaperOrdersWithQuote(
     if (satisfaction.satisfied && satisfaction.fillPrice && satisfaction.fees !== undefined) {
       const fillRes = await executePaperLimitFill(prismaClient, {
         orderId: order.id,
+        userId,
         fillPrice: satisfaction.fillPrice,
         fees: satisfaction.fees,
         feeBreakdown: satisfaction.feeBreakdown,

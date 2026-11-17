@@ -24,7 +24,7 @@ import {
 const NAV = [
   { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/stocks/RELIANCE', icon: TrendingUp, label: 'Stock Analysis' },
-  { href: '/orders', icon: ShoppingBag, label: 'Order Blotter' },
+  { href: '/orders', icon: ShoppingBag, label: 'Orders' },
   { href: '/portfolio', icon: Briefcase, label: 'Portfolio' },
   { href: '/watchlist', icon: Eye, label: 'Watchlist' },
   { href: '/heatmap', icon: Zap, label: 'Market Heatmap' },
@@ -108,14 +108,6 @@ export default function MobileNav() {
                 })}
               </div>
 
-              {/* Mobile Demo Info */}
-              <div className="mx-2 mb-4 p-3 rounded-xl bg-indigo-500/[0.07] border border-indigo-500/[0.12]">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">Demo Mode · v1.0</span>
-                </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">Add API keys in Settings for live data</p>
-              </div>
             </motion.nav>
           </>
         )}

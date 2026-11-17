@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from config import settings
@@ -6,14 +7,15 @@ from config import settings
 # Use SQLite by default for local development.
 # Switch to PostgreSQL by setting DATABASE_URL in .env
 
-connect_args = {}
-if settings.database_url.startswith("sqlite"):
-    connect_args["check_same_thread"] = False
+database_url = make_url(settings.database_url)
+if database_url.drivername == "postgresql":
+    database_url = database_url.set(drivername="postgresql+psycopg2")
 
+is_sqlite = database_url.get_backend_name() == "sqlite"
 engine = create_engine(
-    settings.database_url,
-    connect_args=connect_args,
-    poolclass=StaticPool if settings.database_url.startswith("sqlite") else None,
+    database_url,
+    connect_args={"check_same_thread": False} if is_sqlite else {},
+    poolclass=StaticPool if is_sqlite else None,
     echo=settings.debug,
 )
 

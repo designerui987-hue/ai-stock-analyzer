@@ -2,26 +2,19 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Plus, Search, Trash2, ArrowUpRight } from 'lucide-react';
+import { Plus, Search, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
-import { api, auth } from '@/lib/api';
-
-function getSignal(changePct: number) {
-  if (changePct > 1.5) return 'buy';
-  if (changePct < -0.5) return 'sell';
-  return 'hold';
-}
+import { api } from '@/lib/api';
 
 interface WatchlistStock {
   symbol: string;
   exchange: string;
-  price: number;
-  change_pct: number;
-  volume: number;
+  price: number | null;
+  change_pct: number | null;
   freshness?: string;
   source?: string;
   as_of?: string;
@@ -33,51 +26,30 @@ export default function WatchlistPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [watchlistStocks, setWatchlistStocks] = useState<WatchlistStock[]>([]);
 
   const loadWatchlist = async () => {
     try {
       setLoading(true);
       const res = await api.getWatchlist();
-      if (res?.success && Array.isArray(res.items)) {
-        if (res.items.length === 0) {
-          setWatchlistStocks([]);
-          return;
-        }
-
-        // Fetch quote data for each tracked symbol
-        const stockPromises = res.items.map(async (item: any) => {
-          try {
-            const q = await api.getQuoteData(item.symbol);
-            return {
-              symbol: item.symbol,
-              exchange: item.exchange || 'NSE',
-              price: typeof q?.price === 'number' ? q.price : 0,
-              change_pct: typeof q?.change_percent === 'number' ? q.change_percent : 0,
-              volume: typeof q?.volume === 'number' ? q.volume : 0,
-              freshness: q?.freshness || 'DELAYED',
-              source: q?.source || 'yfinance',
-              as_of: q?.as_of || item.added_at,
-            };
-          } catch {
-            return {
-              symbol: item.symbol,
-              exchange: item.exchange || 'NSE',
-              price: 0,
-              change_pct: 0,
-              volume: 0,
-              freshness: 'UNAVAILABLE',
-              source: 'yfinance',
-              as_of: item.added_at,
-            };
-          }
-        });
-
-        const resolved = await Promise.all(stockPromises);
-        setWatchlistStocks(resolved);
-      }
-    } catch (e) {
-      console.error('Error fetching watchlist:', e);
+      if (!res?.success || !Array.isArray(res.items)) throw new Error('Unable to load watchlist.');
+      const stocks = await Promise.all(res.items.map(async (item: { symbol: string; exchange: string }) => {
+        const q = await api.getQuoteData(item.symbol, item.exchange).catch(() => null);
+        return {
+          symbol: item.symbol,
+          exchange: item.exchange,
+          price: typeof q?.price === 'number' && q.price > 0 ? q.price : null,
+          change_pct: typeof q?.change_percent === 'number' ? q.change_percent : null,
+          freshness: q?.freshness || 'UNAVAILABLE',
+          source: q?.source,
+          as_of: q?.as_of,
+        };
+      }));
+      setWatchlistStocks(stocks);
+      setError(null);
+    } catch {
+      setError('Unable to load your watchlist. Try again.');
     } finally {
       setLoading(false);
     }
@@ -87,15 +59,17 @@ export default function WatchlistPage() {
     loadWatchlist();
   }, []);
 
-  // Subscribe to price stream for active watchlist
+  const symbolsKey = watchlistStocks.filter((stock) => stock.exchange === 'NSE')
+    .map((stock) => stock.symbol).sort().join(',');
+  // Subscribe to NSE price updates for the current watchlist.
   useEffect(() => {
-    if (watchlistStocks.length === 0) return;
-    const symbols = watchlistStocks.map((s) => s.symbol);
+    if (!symbolsKey) return;
+    const symbols = symbolsKey.split(',');
     const unsub = api.subscribePriceStream(symbols, (payload: Record<string, any>) => {
       if (!payload || typeof payload !== 'object') return;
       setWatchlistStocks((prev) =>
         prev.map((item) => {
-          const tick = payload[item.symbol];
+          const tick = item.exchange === 'NSE' ? payload[item.symbol] : undefined;
           if (tick && typeof tick.price === 'number' && tick.price > 0) {
             return {
               ...item,
@@ -114,7 +88,7 @@ export default function WatchlistPage() {
     return () => {
       unsub();
     };
-  }, [watchlistStocks.length]);
+  }, [symbolsKey]);
 
   const handleAddSymbol = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,24 +96,26 @@ export default function WatchlistPage() {
     if (!sym) return;
 
     setIsAdding(true);
+    setError(null);
     try {
       await api.addToWatchlist(sym, 'NSE');
       setNewSymbol('');
       setShowAddModal(false);
       await loadWatchlist();
     } catch (err: any) {
-      alert(err?.message || 'Failed to add symbol to watchlist');
+      setError(err?.message || 'Failed to add symbol to watchlist.');
     } finally {
       setIsAdding(false);
     }
   };
 
   const handleRemove = async (sym: string) => {
+    setError(null);
     try {
       await api.removeFromWatchlist(sym);
       setWatchlistStocks((prev) => prev.filter((s) => s.symbol !== sym));
     } catch (err: any) {
-      alert(err?.message || 'Failed to remove symbol from watchlist');
+      setError(err?.message || 'Failed to remove symbol from watchlist.');
     }
   };
 
@@ -147,17 +123,13 @@ export default function WatchlistPage() {
     s.symbol.toLowerCase().includes(filterQuery.toLowerCase())
   );
 
-  const buyCount = watchlistStocks.filter((s) => s.change_pct > 1.5).length;
-  const holdCount = watchlistStocks.filter((s) => s.change_pct >= -0.5 && s.change_pct <= 1.5).length;
-  const sellCount = watchlistStocks.filter((s) => s.change_pct < -0.5).length;
-
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
       {/* Top Header Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
           <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-            Personal Watchlist &amp; Market Radar
+            Your watchlist
           </h2>
           <Badge variant="indigo" size="md">
             {watchlistStocks.length} Tracked Assets
@@ -165,7 +137,7 @@ export default function WatchlistPage() {
         </div>
 
         <div className="flex items-center space-x-3">
-          <div className="w-64">
+          <div className="min-w-0 flex-1 sm:w-64">
             <Input
               icon={<Search className="w-3.5 h-3.5" />}
               placeholder="Filter watchlist..."
@@ -180,7 +152,7 @@ export default function WatchlistPage() {
       </div>
 
       {showAddModal && (
-        <form onSubmit={handleAddSymbol} className="p-4 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-500/30 rounded-xl flex items-center space-x-3">
+        <form onSubmit={handleAddSymbol} className="p-4 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-500/30 rounded-xl flex flex-col sm:flex-row sm:items-center gap-3">
           <Input
             placeholder="Type any NSE stock ticker (e.g. TATAMOTORS, INFY, ITC, SBIN)..."
             value={newSymbol}
@@ -195,59 +167,29 @@ export default function WatchlistPage() {
         </form>
       )}
 
-      {/* Signal Distribution Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="flex items-center justify-between">
-          <div>
-            <span className="text-caption text-slate-500 font-medium">Buy Signals</span>
-            <p className="text-h2 font-semibold text-emerald-600 dark:text-emerald-400 mt-1">
-              {buyCount} Assets
-            </p>
-          </div>
-          <Badge variant="emerald" size="md">
-            Bullish Setup
-          </Badge>
-        </Card>
-
-        <Card className="flex items-center justify-between">
-          <div>
-            <span className="text-caption text-slate-500 font-medium">Hold Signals</span>
-            <p className="text-h2 font-semibold text-amber-600 dark:text-amber-400 mt-1">
-              {holdCount} Assets
-            </p>
-          </div>
-          <Badge variant="amber" size="md">
-            Consolidating
-          </Badge>
-        </Card>
-
-        <Card className="flex items-center justify-between">
-          <div>
-            <span className="text-caption text-slate-500 font-medium">Sell Alerts</span>
-            <p className="text-h2 font-semibold text-red-600 dark:text-red-400 mt-1">
-              {sellCount} Assets
-            </p>
-          </div>
-          <Badge variant="red" size="md">
-            Risk Warning
-          </Badge>
-        </Card>
-      </div>
+      {error && (
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-card border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span>{error}</span>
+          <Button variant="outline" size="sm" onClick={() => void loadWatchlist()}>Reload watchlist</Button>
+        </div>
+      )}
 
       {/* Main Watchlist Table */}
       <Card size="large" noPadding className="overflow-hidden">
         {loading ? (
           <div className="p-12 text-center text-sm text-slate-500">
-            Loading your personal watchlist from database...
+            Loading watchlist…
           </div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center space-y-3">
             <p className="text-sm text-slate-500">
-              Your personal watchlist is empty.
+              {watchlistStocks.length > 0 ? 'No symbols match your filter.' : 'Your watchlist is empty.'}
             </p>
-            <Button variant="primary" size="sm" onClick={() => setShowAddModal(true)}>
-              Add your first NSE symbol
-            </Button>
+            {watchlistStocks.length === 0 && !error && (
+              <Button variant="primary" size="sm" onClick={() => setShowAddModal(true)}>
+                Add your first NSE symbol
+              </Button>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -258,14 +200,12 @@ export default function WatchlistPage() {
                   <th className="text-right">Price</th>
                   <th className="text-right">Today&apos;s Change</th>
                   <th className="text-center">Data Freshness</th>
-                  <th className="text-center">Quant Signal</th>
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((stock) => {
-                  const isUp = stock.change_pct >= 0;
-                  const sig = getSignal(stock.change_pct);
+                  const change = stock.change_pct;
                   return (
                     <tr key={stock.symbol}>
                       <td>
@@ -282,28 +222,23 @@ export default function WatchlistPage() {
                       </td>
 
                       <td className="text-right font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                        {stock.price > 0 ? `₹${stock.price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'Unavailable'}
+                        {stock.price !== null ? `₹${stock.price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'Unavailable'}
                       </td>
 
                       <td className="text-right">
-                        <Badge variant={isUp ? 'emerald' : 'red'} size="sm">
-                          {isUp ? '+' : ''}
-                          {stock.change_pct.toFixed(2)}%
-                        </Badge>
+                        {change === null ? '—' : (
+                          <Badge variant={change > 0 ? 'emerald' : change < 0 ? 'red' : 'slate'} size="sm">
+                            {change > 0 ? '+' : ''}{change.toFixed(2)}%
+                          </Badge>
+                        )}
                       </td>
 
                       <td className="text-center">
                         <FreshnessBadge
-                          status={stock.freshness || 'DELAYED'}
+                          status={stock.freshness || 'UNAVAILABLE'}
                           asOf={stock.as_of}
-                          source={stock.source}
+                          source={stock.source ?? null}
                         />
-                      </td>
-
-                      <td className="text-center">
-                        <Badge variant={sig as any} size="sm">
-                          {sig.toUpperCase()}
-                        </Badge>
                       </td>
 
                       <td className="text-right space-x-2">
@@ -315,6 +250,7 @@ export default function WatchlistPage() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          aria-label={`Remove ${stock.symbol} from watchlist`}
                           onClick={() => handleRemove(stock.symbol)}
                           className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20"
                         >

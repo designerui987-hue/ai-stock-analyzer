@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { auth } from '@/lib/api';
 import Link from 'next/link';
-import { ShoppingBag, RefreshCw, AlertTriangle, ExternalLink, ShieldAlert, CheckSquare } from 'lucide-react';
+import { ShoppingBag, RefreshCw, AlertTriangle, ExternalLink, ShieldAlert } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -48,45 +48,54 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [reconcilingId, setReconcilingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
-  const fetchOrders = useCallback(() => {
-    setLoading(true);
-    fetch('/api/broker/orders', { headers: auth.getAuthHeaders() })
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.success) {
-          setPaperOrders(Array.isArray(json.paper_orders) ? json.paper_orders : []);
-          setLiveOrders(Array.isArray(json.live_orders) ? json.live_orders : []);
-          setLiveTradingEnabled(Boolean(json.live_trading_enabled));
-        }
-      })
-      .catch((err) => console.error(err))
-      .finally(() => setLoading(false));
+  const fetchOrders = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
+    try {
+      const res = await fetch('/api/broker/orders', { headers: auth.getAuthHeaders(), cache: 'no-store' });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(res.status === 401 ? 'Sign in again to see your orders.' : 'Unable to load orders. Try refreshing.');
+      }
+      setPaperOrders(Array.isArray(json.paper_orders) ? json.paper_orders : []);
+      setLiveOrders(Array.isArray(json.live_orders) ? json.live_orders : []);
+      setLiveTradingEnabled(Boolean(json.live_trading_enabled));
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Unable to load orders.');
+    } finally {
+      if (showLoading) setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    fetchOrders();
+    void fetchOrders();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void fetchOrders(false);
+    }, 5_000);
+    return () => window.clearInterval(timer);
   }, [fetchOrders]);
 
-  const handleReconcile = async (orderId: string) => {
+  const handleOrderAction = async (orderId: string, action: 'reconcile' | 'cancel') => {
     setReconcilingId(orderId);
     setFeedback(null);
     try {
       const res = await fetch('/api/broker/orders', {
         method: 'PATCH',
         headers: auth.getAuthHeaders(),
-        body: JSON.stringify({ order_id: orderId }),
+        body: JSON.stringify({ order_id: orderId, action }),
       });
       const data = await res.json();
       if (data.success) {
-        setFeedback(data.message || 'Order status reconciled with broker.');
-        fetchOrders();
+        setFeedback(data.message || 'Order updated.');
       } else {
-        setFeedback(`Reconcile error: ${data.error || 'Failed to reconcile order.'}`);
+        setFeedback(data.error || 'Unable to update the order.');
       }
+      void fetchOrders(false);
     } catch (err: any) {
-      setFeedback(`Reconcile error: ${err?.message || 'Network failure'}`);
+      setFeedback(err?.message || 'Unable to update the order.');
     } finally {
       setReconcilingId(null);
     }
@@ -108,11 +117,11 @@ export default function OrdersPage() {
           <div className="flex items-center space-x-2">
             <ShoppingBag className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
             <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-              Order History & Execution Blotter
+              Orders
             </h1>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Strictly segregated audit logs for simulated Paper Trading vs live Zerodha Kite orders.
+            Track simulated paper orders and real orders placed through Zerodha Kite.
           </p>
         </div>
 
@@ -120,7 +129,7 @@ export default function OrdersPage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={fetchOrders}
+            onClick={() => void fetchOrders()}
             icon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />}
           >
             Refresh Blotter
@@ -133,6 +142,12 @@ export default function OrdersPage() {
           </Link>
         </div>
       </div>
+
+      {loadError && (
+        <p role="alert" className="rounded-card border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {loadError}
+        </p>
+      )}
 
       {/* Live Execution Gate Notice */}
       {!liveTradingEnabled && (
@@ -190,7 +205,7 @@ export default function OrdersPage() {
       </div>
 
       {feedback && (
-        <div className="p-3 rounded-card bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-800 dark:text-indigo-200">
+        <div role="status" className="p-3 rounded-card bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-800 dark:text-indigo-200">
           {feedback}
         </div>
       )}
@@ -247,9 +262,9 @@ export default function OrdersPage() {
                 filteredOrders.map((o) => {
                   const isBuy = o.transaction_type === 'BUY';
                   const st = o.status?.toUpperCase() || 'UNKNOWN';
-                  const needsReconcile =
-                    (modeTab === 'LIVE' && (st === 'UNKNOWN' || st === 'OPEN' || st === 'PARTIAL')) ||
-                    (modeTab === 'PAPER' && st === 'OPEN');
+                  const action = modeTab === 'PAPER'
+                    ? st === 'OPEN' ? 'cancel' : null
+                    : ['UNKNOWN', 'OPEN', 'PARTIAL'].includes(st) ? 'reconcile' : null;
                   return (
                     <tr key={o.id} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.02] transition-colors">
                       <td className="px-4 py-3 text-slate-500 font-mono text-[11px]">
@@ -320,15 +335,13 @@ export default function OrdersPage() {
                           <Badge variant={STATUS_BADGE_VARIANT[st] || 'slate'} size="sm">
                             {st}
                           </Badge>
-                          {needsReconcile && (
+                          {action && (
                             <button
-                              onClick={() => handleReconcile(o.id)}
+                              onClick={() => void handleOrderAction(o.id, action)}
                               disabled={reconcilingId === o.id}
                               className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 text-[10px] font-semibold"
-                              title="Reconcile ambiguous or pending order against broker API"
                             >
-                              <CheckSquare className="w-3 h-3" />
-                              {reconcilingId === o.id ? '...' : 'Reconcile'}
+                              {reconcilingId === o.id ? 'Updating…' : action === 'cancel' ? 'Cancel' : 'Reconcile'}
                             </button>
                           )}
                         </div>

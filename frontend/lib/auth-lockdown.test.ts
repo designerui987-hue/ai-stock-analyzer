@@ -15,6 +15,7 @@ import { getVerifiedUserId, AuthError } from './auth/session';
 import { encryptToken, decryptToken } from './security/crypto';
 import { GET as getOrders, POST as postOrders } from '../app/api/broker/orders/route';
 import { GET as getConnection } from '../app/api/broker/connection/route';
+import { POST as evaluatePaperOrders } from '../app/api/broker/orders/evaluate/route';
 import { GET as getPreferences } from '../app/api/alerts/preferences/route';
 import { GET as resolveSignals } from '../app/api/cron/resolve-signals/route';
 
@@ -240,6 +241,42 @@ async function runTests() {
       console.log('  ✓ CRON_SECRET strictly enforced');
     } finally {
       prisma.signal.findMany = origSignalFindMany;
+    }
+  }
+
+  // An authenticated browser session alone must never submit a price for execution.
+  {
+    const originalFindMany = prisma.orderLog.findMany;
+    let orderFilter: any;
+    prisma.orderLog.findMany = (async (args: any) => {
+      orderFilter = args.where;
+      return [];
+    }) as any;
+    function quoteRequest(headers: Record<string, string>) {
+      const timestamp = new Date().toISOString();
+      return new Request('http://localhost/api/broker/orders/evaluate', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          symbol: 'RELIANCE', exchange: 'NSE', price: 95,
+          exchange_timestamp: timestamp, last_trade_timestamp: timestamp,
+          user_id: 'another-account',
+        }),
+      });
+    }
+    try {
+      const bearer = { Authorization: `Bearer ${makeJWT('verified-account')}` };
+      assert.strictEqual((await evaluatePaperOrders(quoteRequest(bearer))).status, 401);
+      assert.strictEqual((await evaluatePaperOrders(quoteRequest({ ...bearer, 'x-cron-secret': 'wrong' }))).status, 401);
+      assert.strictEqual((await evaluatePaperOrders(quoteRequest({ 'x-cron-secret': TEST_CRON }))).status, 401);
+      assert.strictEqual(orderFilter, undefined);
+      const serviceResponse = await evaluatePaperOrders(quoteRequest({ ...bearer, 'x-cron-secret': TEST_CRON }));
+      assert.strictEqual(serviceResponse.status, 200);
+      assert.strictEqual(orderFilter.user_id, 'verified-account');
+      assert.deepStrictEqual(await serviceResponse.json(), { success: true, evaluated: 0, filled: 0 });
+      console.log('  ✓ Quote ingestion requires a service secret and scopes orders to the verified account');
+    } finally {
+      prisma.orderLog.findMany = originalFindMany;
     }
   }
 

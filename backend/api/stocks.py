@@ -13,6 +13,7 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
+from uuid import uuid4
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -25,7 +26,7 @@ from config import settings
 from data.demo_stocks import NIFTY50_STOCKS
 from db.session import get_db
 from services.backtest_service import BacktestEngine
-from services.broker_service import mark_user_kite_token_expired, resolve_user_kite_credentials
+from services.broker_service import expire_quote_session_if_current, resolve_user_kite_credentials
 from services.kite_ws_collector import kite_ws_collector
 from services.market_data_service import MarketHours, market_data_service
 
@@ -94,6 +95,7 @@ async def stream_prices(
 
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:20]
     creds = resolve_user_kite_credentials(user_id, db)
+    subscription = f"watchlist:{uuid4()}"
 
     if creds and settings.kite_ws_enabled:
         try:
@@ -106,12 +108,16 @@ async def stream_prices(
             if (tok := kite_ws_collector.instruments.get_token(sym, exchange=ex_upper)) is not None
         ]
         if tokens:
+            def on_expired(_user_id: str) -> None:
+                asyncio.create_task(asyncio.to_thread(expire_quote_session_if_current, creds))
+
             await kite_ws_collector.start_user_collector(
                 user_id=user_id,
                 api_key=creds.api_key,
                 access_token=creds.access_token,
                 tokens=tokens,
-                on_token_expired=lambda uid: mark_user_kite_token_expired(uid, db),
+                on_token_expired=on_expired,
+                subscription=subscription,
             )
 
     async def event_generator():
@@ -135,7 +141,7 @@ async def stream_prices(
                 try:
                     tick = await asyncio.wait_for(ws_queue.get(), timeout=5.0)
                     tick_sym = str(tick.get("symbol", "")).upper()
-                    if tick_sym in symbol_list:
+                    if tick_sym in symbol_list and tick.get("exchange") == ex_upper:
                         payload = {
                             tick_sym: {
                                 **tick,
@@ -165,6 +171,7 @@ async def stream_prices(
             logger.error("[stream] SSE stream terminated for user=%s: %s", user_id, exc)
         finally:
             kite_ws_collector.unsubscribe_stream(user_id, ws_queue)
+            await kite_ws_collector.release_subscription(user_id, subscription)
 
     return StreamingResponse(
         event_generator(),
@@ -197,6 +204,7 @@ def run_backtest(
 async def get_stock_quote(
     symbol: str,
     exchange: str = Query("NSE"),
+    skip_cache: bool = Query(False),
     user_id: Optional[str] = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
@@ -204,7 +212,7 @@ async def get_stock_quote(
     return await asyncio.to_thread(
         market_data_service.get_quote,
         symbol,
-        False,
+        skip_cache,
         None,
         user_id,
         exchange,

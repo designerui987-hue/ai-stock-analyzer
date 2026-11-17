@@ -148,3 +148,12 @@ def mark_user_kite_token_expired(user_id: str, db: Session) -> None:
     except Exception:
         db.rollback()
 
+
+def expire_quote_session_if_current(credentials: UserKiteCredentials) -> None:
+    """Ignore expiration events from a superseded Kite socket."""
+    from db.session import SessionLocal
+
+    with SessionLocal() as db:
+        current = resolve_user_kite_credentials(credentials.user_id, db)
+        if current and current.access_token == credentials.access_token:
+            mark_user_kite_token_expired(credentials.user_id, db)
