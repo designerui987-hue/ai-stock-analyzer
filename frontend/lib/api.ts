@@ -193,10 +193,58 @@ export const api = {
     const symParam = encodeURIComponent(symbols.join(','));
     // Keep session tokens strictly out of URLs (passed via Authorization header & Cookie)
     const url = `${API_BASE}/api/stocks/stream?symbols=${symParam}`;
-    const controller = new AbortController();
-    let isAborted = false;
+    let activeController: AbortController | null = null;
+    let isCleanedUp = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryAttempt = 0;
+    const MAX_RETRY_DELAY_MS = 15000;
+    const INITIAL_RETRY_DELAY_MS = 1000;
+
+    const cancelPendingRetry = () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const scheduleReconnect = (reason: string) => {
+      if (isCleanedUp) return;
+      cancelPendingRetry();
+      retryAttempt++;
+      // Bounded exponential backoff with jitter: 1s, 2s, 4s, 8s, up to 15s max
+      const expDelay = Math.min(MAX_RETRY_DELAY_MS, INITIAL_RETRY_DELAY_MS * Math.pow(2, retryAttempt - 1));
+      const jitter = Math.floor(Math.random() * 500);
+      const delay = expDelay + jitter;
+
+      if (onError) {
+        onError({
+          code: 'STREAM_RECONNECTING',
+          reason,
+          attempt: retryAttempt,
+          delayMs: delay,
+        });
+      }
+
+      retryTimer = setTimeout(() => {
+        if (!isCleanedUp) {
+          startStream();
+        }
+      }, delay);
+    };
 
     const startStream = async () => {
+      if (isCleanedUp) return;
+      cancelPendingRetry();
+
+      // Cancel any previous stream controller to prevent duplicate streams
+      if (activeController) {
+        activeController.abort();
+        activeController = null;
+      }
+
+      const controller = new AbortController();
+      activeController = controller;
+
       try {
         const res = await fetch(url, {
           method: 'GET',
@@ -210,6 +258,7 @@ export const api = {
 
         if (!res.ok) {
           if (res.status === 401) {
+            // Stop retrying on expired credentials
             if (onError) onError({ code: 'AUTH_EXPIRED', status: 401 });
             return;
           }
@@ -223,10 +272,18 @@ export const api = {
 
         const decoder = new TextDecoder();
         let buffer = '';
+        // Reset retry backoff on successful connection
+        retryAttempt = 0;
 
-        while (!isAborted) {
+        while (!isCleanedUp && activeController === controller) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            // Clean EOF from server (e.g. server restart, proxy timeout, network close)
+            if (!isCleanedUp && activeController === controller) {
+              scheduleReconnect('Clean server EOF received');
+            }
+            break;
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const messages = buffer.split('\n\n');
@@ -245,22 +302,20 @@ export const api = {
           }
         }
       } catch (err: any) {
-        if (isAborted || err.name === 'AbortError') return;
-        if (onError) onError(err);
-        // Auto-reconnect after 3 seconds if not aborted
-        if (!isAborted) {
-          setTimeout(() => {
-            if (!isAborted) startStream();
-          }, 3000);
-        }
+        if (isCleanedUp || err.name === 'AbortError') return;
+        scheduleReconnect(err?.message || 'Network error');
       }
     };
 
     startStream();
 
     return () => {
-      isAborted = true;
-      controller.abort();
+      isCleanedUp = true;
+      cancelPendingRetry();
+      if (activeController) {
+        activeController.abort();
+        activeController = null;
+      }
     };
   },
 

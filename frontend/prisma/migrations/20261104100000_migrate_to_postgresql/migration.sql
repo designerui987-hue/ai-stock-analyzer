@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE IF NOT EXISTS "Signal" (
+CREATE TABLE "Signal" (
     "id" TEXT NOT NULL,
     "symbol" TEXT NOT NULL,
     "signal_type" TEXT NOT NULL,
@@ -22,12 +22,8 @@ CREATE TABLE IF NOT EXISTS "Signal" (
     CONSTRAINT "Signal_pkey" PRIMARY KEY ("id")
 );
 
-ALTER TABLE "Signal" ADD COLUMN IF NOT EXISTS "rule_version" TEXT NOT NULL DEFAULT 'v1.0-deterministic-quant';
-ALTER TABLE "Signal" ADD COLUMN IF NOT EXISTS "source" TEXT NOT NULL DEFAULT 'yfinance';
-ALTER TABLE "Signal" ADD COLUMN IF NOT EXISTS "as_of" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
 -- CreateTable
-CREATE TABLE IF NOT EXISTS "AlertPreference" (
+CREATE TABLE "AlertPreference" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL DEFAULT 'demo_user',
     "channels_enabled" TEXT NOT NULL DEFAULT '{"web_push":true,"telegram":false,"whatsapp":false}',
@@ -37,13 +33,13 @@ CREATE TABLE IF NOT EXISTS "AlertPreference" (
     "alert_types_subscribed" TEXT NOT NULL DEFAULT '{"new_signal":true,"target_hit":true,"sl_hit":true,"breakout":true,"risk_warning":true,"watchlist_move":false}',
     "quiet_hours" TEXT NOT NULL DEFAULT '{"enabled":false,"start":"22:00","end":"07:00"}',
     "min_confidence_threshold" DOUBLE PRECISION NOT NULL DEFAULT 70,
-    "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "AlertPreference_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
-CREATE TABLE IF NOT EXISTS "AlertLog" (
+CREATE TABLE "AlertLog" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
@@ -57,7 +53,7 @@ CREATE TABLE IF NOT EXISTS "AlertLog" (
 );
 
 -- CreateTable
-CREATE TABLE IF NOT EXISTS "BrokerConnection" (
+CREATE TABLE "BrokerConnection" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL DEFAULT 'demo_user',
     "broker" TEXT NOT NULL DEFAULT 'KITE',
@@ -70,7 +66,7 @@ CREATE TABLE IF NOT EXISTS "BrokerConnection" (
 );
 
 -- CreateTable
-CREATE TABLE IF NOT EXISTS "OrderLog" (
+CREATE TABLE "OrderLog" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "broker" TEXT NOT NULL DEFAULT 'KITE',
@@ -91,7 +87,7 @@ CREATE TABLE IF NOT EXISTS "OrderLog" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX IF NOT EXISTS "AlertPreference_user_id_key" ON "AlertPreference"("user_id");
+CREATE UNIQUE INDEX "AlertPreference_user_id_key" ON "AlertPreference"("user_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX IF NOT EXISTS "BrokerConnection_user_id_key" ON "BrokerConnection"("user_id");
+CREATE UNIQUE INDEX "BrokerConnection_user_id_key" ON "BrokerConnection"("user_id");

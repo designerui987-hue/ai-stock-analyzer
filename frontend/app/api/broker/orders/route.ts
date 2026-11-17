@@ -96,56 +96,7 @@ export async function GET(req: Request) {
       where.mode = modeFilter.toUpperCase();
     }
 
-    // Evaluate resting OPEN paper limit orders against fresh quotes before returning blotter
-    const openPaperOrders = await prisma.orderLog.findMany({
-      where: { user_id: userId, mode: 'PAPER', status: 'OPEN' },
-    });
-
-    if (openPaperOrders.length > 0) {
-      const uniqueSymbols = Array.from(
-        new Set(openPaperOrders.map((o) => `${o.exchange || 'NSE'}:${o.symbol}`))
-      );
-      const quotesMap: Record<string, ServerQuotePayload | null> = {};
-      for (const pair of uniqueSymbols) {
-        const [exch, sym] = pair.split(':') as ['NSE' | 'BSE', string];
-        quotesMap[pair] = await fetchServerQuote(sym, exch, req.headers.get('authorization'));
-      }
-
-      for (const order of openPaperOrders) {
-        if (order.order_type === 'LIMIT') {
-          const pair = `${order.exchange || 'NSE'}:${order.symbol}`;
-          const q = quotesMap[pair];
-          if (q) {
-            const check = checkPaperLimitSatisfaction({
-              order: {
-                id: order.id,
-                symbol: order.symbol,
-                exchange: order.exchange,
-                transaction_type: order.transaction_type as any,
-                quantity: order.quantity,
-                order_type: order.order_type,
-                product_type: order.product_type,
-                price: order.price,
-              },
-              quote: q,
-            });
-
-            if (check.satisfied && check.fillPrice && check.fees !== undefined) {
-              await executePaperLimitFill(prisma, {
-                orderId: order.id,
-                fillPrice: check.fillPrice,
-                fees: check.fees,
-                feeBreakdown: check.feeBreakdown,
-                quoteAsOf: check.quoteAsOf,
-                quoteSource: check.quoteSource,
-                sessionName: check.sessionName,
-              });
-            }
-          }
-        }
-      }
-    }
-
+    // Orders GET is strictly read-only: blotter reads persisted orders without executing mutation side-effects
     const orders = await prisma.orderLog.findMany({
       where,
       orderBy: { placed_at: 'desc' },

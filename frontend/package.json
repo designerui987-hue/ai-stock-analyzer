@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "npx tsx lib/signal-resolution.test.ts && npx tsx lib/auth-lockdown.test.ts && npx tsx lib/audit-regressions.test.ts && npx tsx lib/kite-oauth-concurrency.test.ts && npx tsx lib/paper-limit-order-lifecycle.test.ts && npx tsx lib/api-stream-recovery.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

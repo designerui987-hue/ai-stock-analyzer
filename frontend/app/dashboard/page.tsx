@@ -191,16 +191,19 @@ export default function DashboardPage() {
           setLastStreamUpdate(new Date().toISOString());
 
           const firstEntry = Object.values(payload)[0];
+          // "Live" strictly requires a connected feed with verified real-time tick freshness
           if (firstEntry?.connection_status === 'CONNECTED' && firstEntry?.freshness === 'LIVE') {
             setStreamStatus('LIVE');
-          } else if (
-            firstEntry?.market_session &&
-            firstEntry.market_session !== 'REGULAR' &&
-            firstEntry.market_session !== 'SPECIAL_SESSION'
-          ) {
-            setStreamStatus('MARKET_CLOSED');
+          } else if (firstEntry?.freshness === 'STALE') {
+            setStreamStatus('STALE');
+          } else if (firstEntry?.freshness === 'DELAYED') {
+            setStreamStatus('DELAYED');
+          } else if (firstEntry?.freshness === 'UNAVAILABLE' || firstEntry?.status === 'unavailable') {
+            setStreamStatus('UNAVAILABLE');
           } else if (firstEntry?.freshness) {
             setStreamStatus(firstEntry.freshness);
+          } else {
+            setStreamStatus('CONNECTED');
           }
 
           // Update active selected stock chart if live tick arrives
@@ -270,13 +273,43 @@ export default function DashboardPage() {
             <h2 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
               NSE Market Telemetry
             </h2>
-            <Badge variant="neutral" size="sm">
-              Session: {overview?.market_session || 'REGULAR (09:15-15:30 IST)'}
+            <Badge
+              variant={
+                overview?.is_market_open ||
+                overview?.market_session === 'REGULAR' ||
+                overview?.market_session === 'SPECIAL_SESSION'
+                  ? 'emerald'
+                  : 'neutral'
+              }
+              size="sm"
+            >
+              Session: {overview?.market_session || (overview?.is_market_open ? 'REGULAR (09:15-15:30 IST)' : 'CLOSED')}
             </Badge>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <Wifi className="w-3.5 h-3.5 text-indigo-500" />
-            <span>Feed: <strong>{streamStatus}</strong></span>
+            <Wifi
+              className={`w-3.5 h-3.5 ${
+                streamStatus === 'LIVE'
+                  ? 'text-emerald-500'
+                  : streamStatus === 'RECONNECTING'
+                  ? 'text-amber-500 animate-pulse'
+                  : 'text-slate-400'
+              }`}
+            />
+            <span>
+              Feed:{' '}
+              <strong
+                className={
+                  streamStatus === 'LIVE'
+                    ? 'text-emerald-600 dark:text-emerald-400 font-bold'
+                    : streamStatus === 'RECONNECTING'
+                    ? 'text-amber-600 dark:text-amber-400 font-bold'
+                    : ''
+                }
+              >
+                {streamStatus}
+              </strong>
+            </span>
             {lastStreamUpdate && <span>• Last tick {formatIst(lastStreamUpdate)}</span>}
           </div>
         </div>

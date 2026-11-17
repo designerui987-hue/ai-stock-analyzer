@@ -87,6 +87,8 @@ export function validateQuoteForOrder(
     expectedExchange: string;
     maxAgeSeconds: number;
     nowUtc?: Date;
+    maxClockSkewSeconds?: number;
+    orderPlacedAt?: Date | string;
   }
 ): {
   valid: boolean;
@@ -111,7 +113,24 @@ export function validateQuoteForOrder(
   if (!quote.source || quote.source === 'unavailable') {
     return { valid: false, reason: 'Quote source missing or unverified.' };
   }
-  if (quote.exchange && quote.exchange.toUpperCase() !== opts.expectedExchange.toUpperCase()) {
+  // Explicit symbol match
+  const quoteSym = (quote.symbol || '').trim().toUpperCase();
+  const expectedSym = opts.expectedSymbol.trim().toUpperCase();
+  if (quoteSym && quoteSym !== expectedSym) {
+    return {
+      valid: false,
+      reason: `Symbol mismatch: expected ${expectedSym}, got ${quoteSym}.`,
+    };
+  }
+
+  // Explicit exchange required
+  if (!quote.exchange) {
+    return {
+      valid: false,
+      reason: `Quote missing exchange: expected ${opts.expectedExchange}.`,
+    };
+  }
+  if (quote.exchange.toUpperCase() !== opts.expectedExchange.toUpperCase()) {
     return {
       valid: false,
       reason: `Exchange mismatch: expected ${opts.expectedExchange}, got ${quote.exchange}.`,
@@ -128,6 +147,28 @@ export function validateQuoteForOrder(
   }
 
   const nowMs = (opts.nowUtc || new Date()).getTime();
+  const maxClockSkewMs = (opts.maxClockSkewSeconds ?? 15) * 1000; // 15s clock skew tolerance
+
+  // Reject future timestamps outside clock-skew tolerance
+  if (obsMs > nowMs + maxClockSkewMs) {
+    const aheadSeconds = Math.round((obsMs - nowMs) / 1000);
+    return {
+      valid: false,
+      reason: `Future quote timestamp outside clock-skew tolerance (${aheadSeconds}s ahead > max ${opts.maxClockSkewSeconds ?? 15}s).`,
+    };
+  }
+
+  // Reject quote if strictly older than when the order was placed
+  if (opts.orderPlacedAt) {
+    const orderPlacedMs = typeof opts.orderPlacedAt === 'string' ? Date.parse(opts.orderPlacedAt) : opts.orderPlacedAt.getTime();
+    if (!Number.isNaN(orderPlacedMs) && obsMs < orderPlacedMs) {
+      return {
+        valid: false,
+        reason: `Quote timestamp (${new Date(obsMs).toISOString()}) is older than order creation time (${new Date(orderPlacedMs).toISOString()}).`,
+      };
+    }
+  }
+
   const ageSeconds = Math.max(0, (nowMs - obsMs) / 1000);
   if (ageSeconds > opts.maxAgeSeconds) {
     return {
@@ -336,10 +377,12 @@ export function checkPaperLimitSatisfaction(params: {
     order_type: string;
     product_type?: string;
     price: number | null; // Limit price
+    placed_at?: Date | string;
   };
   quote: ServerQuotePayload | null;
   nowUtc?: Date;
   maxAgeSeconds?: number;
+  maxClockSkewSeconds?: number;
 }): PaperLimitSatisfactionResult {
   const now = params.nowUtc || new Date();
   const session = evaluateNseSession(now);
@@ -364,6 +407,8 @@ export function checkPaperLimitSatisfaction(params: {
     expectedSymbol: params.order.symbol,
     expectedExchange: params.order.exchange || 'NSE',
     maxAgeSeconds: params.maxAgeSeconds ?? 60,
+    maxClockSkewSeconds: params.maxClockSkewSeconds ?? 15,
+    orderPlacedAt: params.order.placed_at,
     nowUtc: now,
   });
 
@@ -493,6 +538,76 @@ export async function executePaperLimitFill(
     count: 1,
     reason: `Order ${params.orderId} filled at ₹${params.fillPrice}.`,
   };
+}
+
+/**
+ * Server-side evaluation of resting paper limit orders as fresh quotes arrive.
+ * Can be invoked by server tick collectors or background worker processes even when browser is closed.
+ * Atomically transitions resting OPEN orders that meet limit criteria to FILLED.
+ */
+export async function evaluateRestingPaperOrdersWithQuote(
+  prismaClient: any,
+  quote: ServerQuotePayload,
+  nowUtc?: Date
+): Promise<{ evaluated: number; filled: number; results: Array<{ orderId: string; status: string; reason: string }> }> {
+  const quoteSym = (quote.symbol || '').trim().toUpperCase();
+  const quoteExch = (quote.exchange || 'NSE').trim().toUpperCase();
+  if (!quoteSym) return { evaluated: 0, filled: 0, results: [] };
+
+  const openOrders = await prismaClient.orderLog.findMany({
+    where: {
+      mode: 'PAPER',
+      status: 'OPEN',
+      symbol: quoteSym,
+      exchange: quoteExch,
+      order_type: 'LIMIT',
+    },
+  });
+
+  const results: Array<{ orderId: string; status: string; reason: string }> = [];
+  let filledCount = 0;
+
+  for (const order of openOrders) {
+    const satisfaction = checkPaperLimitSatisfaction({
+      order: {
+        id: order.id,
+        symbol: order.symbol,
+        exchange: order.exchange,
+        transaction_type: order.transaction_type as any,
+        quantity: order.quantity,
+        order_type: order.order_type,
+        product_type: order.product_type,
+        price: order.price,
+        placed_at: order.placed_at,
+      },
+      quote,
+      nowUtc,
+    });
+
+    if (satisfaction.satisfied && satisfaction.fillPrice && satisfaction.fees !== undefined) {
+      const fillRes = await executePaperLimitFill(prismaClient, {
+        orderId: order.id,
+        fillPrice: satisfaction.fillPrice,
+        fees: satisfaction.fees,
+        feeBreakdown: satisfaction.feeBreakdown,
+        quoteAsOf: satisfaction.quoteAsOf,
+        quoteSource: satisfaction.quoteSource,
+        sessionName: satisfaction.sessionName,
+        nowUtc,
+      });
+
+      if (fillRes.filled) {
+        filledCount++;
+        results.push({ orderId: order.id, status: 'FILLED', reason: satisfaction.reason });
+      } else {
+        results.push({ orderId: order.id, status: 'OPEN', reason: fillRes.reason });
+      }
+    } else {
+      results.push({ orderId: order.id, status: 'OPEN', reason: satisfaction.reason });
+    }
+  }
+
+  return { evaluated: openOrders.length, filled: filledCount, results };
 }
 
 

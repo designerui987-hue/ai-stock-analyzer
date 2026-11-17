@@ -170,10 +170,34 @@ async function runPaperLimitLifecycleTests() {
 
   // 6. Concurrency & Idempotent Fill execution test (Prevent duplicate fills & fees)
   class MockPrismaOrderLog {
-    private orders = new Map<string, { id: string; status: string; fees_inr: number; price: number }>();
+    public orders = new Map<string, any>();
 
     constructor() {
-      this.orders.set('ord-buy-001', { id: 'ord-buy-001', status: 'OPEN', fees_inr: 0, price: 2500 });
+      this.orders.set('ord-buy-001', {
+        id: 'ord-buy-001',
+        symbol: 'RELIANCE',
+        exchange: 'NSE',
+        transaction_type: 'BUY',
+        quantity: 10,
+        order_type: 'LIMIT',
+        product_type: 'CNC',
+        price: 2500,
+        status: 'OPEN',
+        fees_inr: 0,
+        placed_at: new Date(REGULAR_SESSION_DATE.getTime() - 5000),
+      });
+    }
+
+    async findMany(query?: any) {
+      const all = Array.from(this.orders.values());
+      return all.filter((o) => {
+        if (query?.where?.symbol && o.symbol !== query.where.symbol) return false;
+        if (query?.where?.exchange && o.exchange !== query.where.exchange) return false;
+        if (query?.where?.status && o.status !== query.where.status) return false;
+        if (query?.where?.mode && o.mode && o.mode !== query.where.mode) return false;
+        if (query?.where?.order_type && o.order_type !== query.where.order_type) return false;
+        return true;
+      });
     }
 
     async updateMany(query: { where: { id: string; status: string }; data: any }) {
@@ -213,6 +237,109 @@ async function runPaperLimitLifecycleTests() {
   assert.strictEqual(fill2.count, 0);
   assert.ok(fill2.reason.includes('idempotency guard'));
   console.log('✓ Atomic idempotency guard prevents duplicate fills and fees when quote events repeat');
+
+  // 7. Targeted Regressions: wrong-symbol, missing-exchange, future-timestamp, quote older than order
+  // 7a: Wrong-symbol quote
+  const wrongSymbolQuote: ServerQuotePayload = {
+    symbol: 'INFY', // Wrong symbol
+    exchange: 'NSE',
+    price: 2480.0,
+    source: 'live_feed',
+    as_of: REGULAR_SESSION_DATE.toISOString(),
+  };
+  const wrongSymRes = checkPaperLimitSatisfaction({
+    order: buyLimitOrder, // expected symbol: RELIANCE
+    quote: wrongSymbolQuote,
+    nowUtc: REGULAR_SESSION_DATE,
+  });
+  assert.strictEqual(wrongSymRes.satisfied, false, 'Wrong-symbol quote must not satisfy');
+  assert.ok(wrongSymRes.reason.includes('Symbol mismatch') || wrongSymRes.reason.includes('mismatch'));
+  console.log('✓ Targeted regression: Wrong symbol rejected');
+
+  // 7b: Missing-exchange quote
+  const missingExchQuote: ServerQuotePayload = {
+    symbol: 'RELIANCE',
+    price: 2480.0,
+    source: 'live_feed',
+    as_of: REGULAR_SESSION_DATE.toISOString(),
+  };
+  const missingExchRes = checkPaperLimitSatisfaction({
+    order: buyLimitOrder,
+    quote: missingExchQuote,
+    nowUtc: REGULAR_SESSION_DATE,
+  });
+  assert.strictEqual(missingExchRes.satisfied, false, 'Missing exchange quote must not satisfy');
+  assert.ok(missingExchRes.reason.includes('missing exchange'));
+  console.log('✓ Targeted regression: Missing exchange rejected');
+
+  // 7c: Future-timestamp beyond clock-skew tolerance (> 15s)
+  const futureQuote: ServerQuotePayload = {
+    symbol: 'RELIANCE',
+    exchange: 'NSE',
+    price: 2480.0,
+    source: 'live_feed',
+    as_of: new Date(REGULAR_SESSION_DATE.getTime() + 60_000).toISOString(), // 60s in future
+  };
+  const futureRes = checkPaperLimitSatisfaction({
+    order: buyLimitOrder,
+    quote: futureQuote,
+    nowUtc: REGULAR_SESSION_DATE,
+    maxClockSkewSeconds: 15,
+  });
+  assert.strictEqual(futureRes.satisfied, false, 'Future timestamp quote must not satisfy');
+  assert.ok(futureRes.reason.includes('clock-skew tolerance'));
+  console.log('✓ Targeted regression: Future timestamp outside clock-skew tolerance rejected');
+
+  // 7d: Quote older than order creation time
+  const quoteBeforeOrder: ServerQuotePayload = {
+    symbol: 'RELIANCE',
+    exchange: 'NSE',
+    price: 2480.0,
+    source: 'live_feed',
+    as_of: new Date(REGULAR_SESSION_DATE.getTime() - 10_000).toISOString(), // 10s before order
+  };
+  const orderWithPlacedAt = {
+    ...buyLimitOrder,
+    placed_at: REGULAR_SESSION_DATE.toISOString(), // Order created at T
+  };
+  const olderQuoteRes = checkPaperLimitSatisfaction({
+    order: orderWithPlacedAt,
+    quote: quoteBeforeOrder, // Quote from T - 10s
+    nowUtc: REGULAR_SESSION_DATE,
+  });
+  assert.strictEqual(olderQuoteRes.satisfied, false, 'Quote older than order must not satisfy');
+  assert.ok(olderQuoteRes.reason.includes('older than order'));
+  console.log('✓ Targeted regression: Quote older than order rejected');
+
+  // 8. Test a limit crossing that occurs and reverses before anyone opens the blotter
+  // Order placed with limit 2500 (buy).
+  // Market dips to 2490 (touch/crossing), then reverses to 2550.
+  // When evaluateRestingPaperOrdersWithQuote runs on the dip, order is FILLED.
+  const blotterOrderLog = new MockPrismaOrderLog();
+  const blotterPrisma = { orderLog: blotterOrderLog };
+
+  const { evaluateRestingPaperOrdersWithQuote } = await import('./orders/execution');
+  // At T+10s (market dips to 2490)
+  const dipQuote: ServerQuotePayload = {
+    symbol: 'RELIANCE',
+    exchange: 'NSE',
+    price: 2490.0,
+    source: 'live_feed',
+    as_of: new Date(REGULAR_SESSION_DATE.getTime() + 10_000).toISOString(),
+  };
+  const evalResult = await evaluateRestingPaperOrdersWithQuote(
+    blotterPrisma,
+    dipQuote,
+    new Date(REGULAR_SESSION_DATE.getTime() + 10_000)
+  );
+  assert.strictEqual(evalResult.filled, 1, 'Resting limit order must fill during the quote crossing');
+
+  // At T+30s (market reverses to 2550, user finally opens blotter)
+  // Blotter GET performs a read-only fetch
+  const finalOrder = (blotterOrderLog as any).orders.get('ord-buy-001');
+  assert.strictEqual(finalOrder.status, 'FILLED', 'Order must already be FILLED when blotter is opened');
+  assert.ok(finalOrder.price <= 2500, 'Fill price must respect buy limit price');
+  console.log('✓ Limit crossing occurring and reversing before blotter opened is already FILLED');
 
   console.log('All Paper Limit Order Lifecycle Tests Passed successfully!');
 }

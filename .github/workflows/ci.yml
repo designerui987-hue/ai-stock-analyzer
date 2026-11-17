@@ -79,6 +79,10 @@ jobs:
         run: |
           npx tsx lib/signal-resolution.test.ts
           npx tsx lib/auth-lockdown.test.ts
+          npx tsx lib/audit-regressions.test.ts
+          npx tsx lib/kite-oauth-concurrency.test.ts
+          npx tsx lib/paper-limit-order-lifecycle.test.ts
+          npx tsx lib/api-stream-recovery.test.ts
 
       - name: Build Next.js Production Bundle
         run: npm run build
