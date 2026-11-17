@@ -99,31 +99,7 @@ export default function SettingsPage() {
   }, []);
 
   const handleEnableWebPush = async () => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      alert('Browser Push Notifications are not supported in this browser.');
-      return;
-    }
-
-    try {
-      const perm = await Notification.requestPermission();
-      if (perm === 'granted') {
-        setPushSubscribed(true);
-        setChannels({ ...channels, web_push: true });
-
-        // Save a mock subscription payload to backend
-        const mockSub = {
-          endpoint: 'https://fcm.googleapis.com/fcm/send/demo_token',
-          keys: { p256dh: 'demo_key', auth: 'demo_auth' },
-        };
-        await fetch('/api/alerts/subscribe-push', {
-          method: 'POST',
-          headers: auth.getAuthHeaders(),
-          body: JSON.stringify({ subscription: mockSub }),
-        });
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    alert('Web Push gateway is currently disabled in staging. Service worker push registration requires production VAPID infrastructure.');
   };
 
   const handleSave = async () => {
@@ -136,22 +112,31 @@ export default function SettingsPage() {
       }));
     }
 
-    // Save alert preferences to backend API
-    await fetch('/api/alerts/preferences', {
-      method: 'POST',
-      headers: auth.getAuthHeaders(),
-      body: JSON.stringify({
-        channels_enabled: channels,
-        alert_types_subscribed: alertTypes,
-        quiet_hours: quietHours,
-        min_confidence_threshold: minConfThreshold,
-        whatsapp_number: whatsappPhone,
-        telegram_chat_id: telegramChatId,
-      }),
-    });
+    try {
+      // Save alert preferences to backend API
+      const res = await fetch('/api/alerts/preferences', {
+        method: 'POST',
+        headers: auth.getAuthHeaders(),
+        body: JSON.stringify({
+          channels_enabled: channels,
+          alert_types_subscribed: alertTypes,
+          quiet_hours: quietHours,
+          min_confidence_threshold: minConfThreshold,
+          whatsapp_number: whatsappPhone,
+          telegram_chat_id: telegramChatId,
+        }),
+      });
 
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } else {
+        alert('Failed to save preferences on the server.');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Network error while saving settings.');
+    }
   };
 
   return (
@@ -545,32 +530,34 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={async () => {
-                    await fetch('/api/broker/connection', {
-                      method: 'POST',
-                      headers: auth.getAuthHeaders(),
-                      body: JSON.stringify({ action: 'disconnect' }),
-                    });
-                    setBrokerConn({ connected: false, status: 'DISCONNECTED' });
+                    try {
+                      const res = await fetch('/api/broker/connection', {
+                        method: 'POST',
+                        headers: auth.getAuthHeaders(),
+                        body: JSON.stringify({ action: 'disconnect' }),
+                      });
+                      const json = await res.json();
+                      if (res.ok && json.success) {
+                        setBrokerConn({ connected: false, status: 'DISCONNECTED' });
+                      } else {
+                        alert(json.error || 'Failed to disconnect broker');
+                      }
+                    } catch (e) {
+                      console.error(e);
+                      alert('Error communicating with server');
+                    }
                   }}
                   className="px-3 py-1.5 bg-red-600/10 hover:bg-red-600/20 text-red-600 dark:text-red-400 rounded text-xs font-semibold transition-colors"
                 >
                   Disconnect Broker
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await fetch('/api/broker/connection', {
-                      method: 'POST',
-                      headers: auth.getAuthHeaders(),
-                      body: JSON.stringify({ action: 'connect_demo' }),
-                    });
-                    setBrokerConn({ connected: true, status: 'CONNECTED' });
-                  }}
+                <a
+                  href="/api/broker/kite/login"
                   className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-semibold transition-colors flex items-center gap-1.5"
                 >
                   Connect Zerodha Kite <ExternalLink className="w-3 h-3" />
-                </button>
+                </a>
               )}
             </div>
           </div>

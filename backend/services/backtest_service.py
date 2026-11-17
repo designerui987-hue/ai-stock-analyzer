@@ -118,18 +118,48 @@ class BacktestEngine:
         # Warmup period: 50 bars required for SMA50
         warmup = 50
 
-        for i in range(warmup, n_bars - 1):
+        pending_signal: Optional[Dict[str, Any]] = None
+        current_entry_friction = 0.0
+
+        for i in range(warmup, n_bars):
             curr_date = dates[i]
-            curr_close = closes[i]
+            curr_close = float(closes[i])
+            bar_open = float(opens[i])
+            bar_high = float(highs[i])
+            bar_low = float(lows[i])
+            bar_close = curr_close
+
+            # ── Execute pending signal from previous bar's close at today's OPEN (No lookahead) ──
+            if pending_signal is not None and not in_trade:
+                signal_type = pending_signal["signal"]
+                atr = pending_signal["atr"]
+
+                if signal_type == "BUY":
+                    exec_price = bar_open * (1 + SLIPPAGE_PCT)
+                    stop_price = round(exec_price - 1.5 * atr, 2)
+                    target_price = round(exec_price + 3.0 * atr, 2)
+                else:
+                    exec_price = bar_open * (1 - SLIPPAGE_PCT)
+                    stop_price = round(exec_price + 1.5 * atr, 2)
+                    target_price = round(exec_price - 3.0 * atr, 2)
+
+                alloc_capital = capital * 0.95
+                shares = int(alloc_capital // exec_price)
+                if shares > 0:
+                    current_entry_friction = calculate_friction(shares * exec_price)
+                    capital -= current_entry_friction
+                    in_trade = True
+                    trade_type = signal_type
+                    entry_price = exec_price
+                    entry_idx = i
+                    entry_date = curr_date
+                    position_shares = shares
+
+                pending_signal = None
 
             # ── 1. If currently in a trade, evaluate today's bar for exit ─────
             if in_trade:
-                bar_high = highs[i]
-                bar_low = lows[i]
-                bar_open = opens[i]
-                bar_close = closes[i]
                 bars_held = i - entry_idx
-
                 exit_triggered = False
                 exit_reason = ""
                 raw_exit_price = 0.0
@@ -204,7 +234,7 @@ class BacktestEngine:
                         "holding_days": bars_held,
                         "exit_reason": exit_reason,
                         "gross_pnl": round(gross_pnl, 2),
-                        "friction_paid": round(exit_friction, 2),
+                        "friction_paid": round(current_entry_friction + exit_friction, 2),
                         "net_pnl": round(net_pnl, 2),
                         "net_return_pct": net_return_pct,
                         "capital_after": round(capital, 2),
@@ -212,9 +242,10 @@ class BacktestEngine:
 
                     in_trade = False
                     position_shares = 0
+                    current_entry_friction = 0.0
 
             # ── 2. If flat, evaluate indicator rules strictly on bars[:i+1] ───
-            if not in_trade:
+            if not in_trade and pending_signal is None:
                 sub_closes = closes[i - 49 : i + 1] # exactly 50 bars
                 sma20 = float(sub_closes[-20:].mean())
                 sma50 = float(sub_closes.mean())
@@ -237,11 +268,15 @@ class BacktestEngine:
                 vol20 = float(volumes[i - 19 : i + 1].mean())
                 vol_surge = float(volumes[i]) / (vol20 + 1e-9)
 
-                # MACD (12, 26, 9)
-                ema12 = float(pd.Series(sub_closes).ewm(span=12, adjust=False).mean().iloc[-1])
-                ema26 = float(pd.Series(sub_closes).ewm(span=26, adjust=False).mean().iloc[-1])
-                macd = ema12 - ema26
-                macd_hist = macd * 0.15 # positive when macd is expanding
+                # MACD (12, 26, 9) with real 9-period EMA signal line
+                close_s = pd.Series(sub_closes)
+                ema12_s = close_s.ewm(span=12, adjust=False).mean()
+                ema26_s = close_s.ewm(span=26, adjust=False).mean()
+                macd_s = ema12_s - ema26_s
+                signal_s = macd_s.ewm(span=9, adjust=False).mean()
+                macd = float(macd_s.iloc[-1])
+                macd_signal = float(signal_s.iloc[-1])
+                macd_hist = macd - macd_signal
 
                 # Deterministic consensus rules
                 bull_trend = curr_close > sma20 and sma20 >= sma50
@@ -262,30 +297,11 @@ class BacktestEngine:
                 elif bear_count >= 3 and bear_count > bull_count:
                     signal = "SELL"
 
-                if signal:
-                    # Enter on bar i+1 open (NO lookahead bias)
-                    next_open = opens[i + 1]
-                    if signal == "BUY":
-                        exec_price = next_open * (1 + SLIPPAGE_PCT)
-                        stop_price = round(exec_price - 1.5 * atr, 2)
-                        target_price = round(exec_price + 3.0 * atr, 2)
-                    else:
-                        exec_price = next_open * (1 - SLIPPAGE_PCT)
-                        stop_price = round(exec_price + 1.5 * atr, 2)
-                        target_price = round(exec_price - 3.0 * atr, 2)
-
-                    # Position sizing: commit 95% of liquid capital
-                    alloc_capital = capital * 0.95
-                    shares = int(alloc_capital // exec_price)
-                    if shares > 0:
-                        entry_friction = calculate_friction(shares * exec_price)
-                        capital -= entry_friction
-                        in_trade = True
-                        trade_type = signal
-                        entry_price = exec_price
-                        entry_idx = i + 1
-                        entry_date = dates[i + 1]
-                        position_shares = shares
+                if signal and i < n_bars - 1:
+                    pending_signal = {
+                        "signal": signal,
+                        "atr": atr,
+                    }
 
             # Mark to market portfolio equity
             curr_mtm = capital
@@ -304,14 +320,16 @@ class BacktestEngine:
         # ── 3. Benchmark Equity Calculation (NIFTY 50 Buy & Hold) ────────────
         benchmark_series: List[Dict[str, Any]] = []
         if nifty_df is not None and not nifty_df.empty:
-            sub_nifty = nifty_df.loc[stock_df.index[warmup : n_bars - 1]]
+            reindexed_nifty = nifty_df.reindex(stock_df.index).ffill().bfill()
+            sub_nifty = reindexed_nifty.iloc[warmup : n_bars]
             if not sub_nifty.empty:
                 first_nifty = float(sub_nifty["Close"].iloc[0])
-                nifty_shares = self.initial_capital / first_nifty
+                nifty_shares = self.initial_capital / (first_nifty if first_nifty > 0 else 1.0)
                 for dt, row in sub_nifty.iterrows():
                     val = float(row["Close"]) * nifty_shares
+                    dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10]
                     benchmark_series.append({
-                        "date": dt.strftime("%Y-%m-%d"),
+                        "date": dt_str,
                         "benchmark": round(val, 2),
                     })
 

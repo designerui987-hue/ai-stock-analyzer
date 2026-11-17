@@ -19,7 +19,7 @@ import { useAuth } from '@/store/useAuth';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setAuth } = useAuth();
+  const { login } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -63,29 +63,20 @@ export default function LoginPage() {
     setIsLoading(true);
     setError('');
 
-    // Simulate authentication process with 900ms delay
-    setTimeout(() => {
+    try {
+      const ok = await login(email, password);
+      if (ok) {
+        const searchParams = new URLSearchParams(window.location.search);
+        const nextUrl = searchParams.get('next') || '/dashboard';
+        router.push(nextUrl);
+      } else {
+        setError('Invalid email or password.');
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Login failed. Please check your credentials.');
+    } finally {
       setIsLoading(false);
-      setAuth('demo-access-token-12345', {
-        id: 'usr-1',
-        email: email,
-        username: email.split('@')[0],
-      });
-      router.push('/dashboard');
-    }, 900);
-  };
-
-  const handleSocialLogin = (provider: string) => {
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      setAuth(`demo-${provider.toLowerCase()}-token`, {
-        id: 'usr-social',
-        email: `investor@${provider.toLowerCase()}.com`,
-        username: `${provider.toLowerCase()}User`,
-      });
-      router.push('/dashboard');
-    }, 800);
+    }
   };
 
   return (
@@ -254,12 +245,6 @@ export default function LoginPage() {
                   >
                     Password
                   </label>
-                  <Link
-                    href="/forgot-password"
-                    className="text-caption font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
-                  >
-                    Forgot Password?
-                  </Link>
                 </div>
                 <div className="relative flex items-center">
                   <Lock className="absolute left-3.5 w-4 h-4 text-[#94A3B8] dark:text-[#64748B] pointer-events-none" />
@@ -331,73 +316,6 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
-
-            {/* Secondary Divider */}
-            <div className="relative my-6 flex items-center justify-center">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-[#E5E7EB] dark:border-white/[0.08]" />
-              </div>
-              <span className="relative px-3 bg-white dark:bg-[#121826] text-caption font-medium uppercase tracking-wider text-[#94A3B8] dark:text-[#64748B]">
-                OR
-              </span>
-            </div>
-
-            {/* Social Login Buttons */}
-            <div className="space-y-2.5">
-              <button
-                type="button"
-                onClick={() => handleSocialLogin('Google')}
-                disabled={isLoading}
-                className="w-full h-[44px] rounded-btn border border-[#E5E7EB] dark:border-white/[0.08] bg-white dark:bg-slate-900/40 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-[#111827] dark:text-[#F8FAFC] text-body font-medium transition-all duration-150 ease-out flex items-center justify-center space-x-3 disabled:opacity-50"
-              >
-                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.26v3.15C3.24 21.3 7.37 24 12 24z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.26C.46 8.16 0 9.99 0 12s.46 3.84 1.26 5.42l4.02-3.15z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.37 0 3.24 2.7 1.26 6.58l4.02 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                  />
-                </svg>
-                <span>Continue with Google</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSocialLogin('Apple')}
-                disabled={isLoading}
-                className="w-full h-[44px] rounded-btn border border-[#E5E7EB] dark:border-white/[0.08] bg-white dark:bg-slate-900/40 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-[#111827] dark:text-[#F8FAFC] text-body font-medium transition-all duration-150 ease-out flex items-center justify-center space-x-3 disabled:opacity-50"
-              >
-                <svg className="w-4 h-4 fill-current shrink-0" viewBox="0 0 170 170">
-                  <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.89.24-9.76-1.85-14.61-6.23-3.26-2.85-7.18-7.6-11.76-14.25-6.53-9.49-11.66-19.82-15.39-31.01-3.73-11.19-5.6-22.13-5.6-32.82 0-14.73 3.73-26.96 11.19-36.69 7.46-9.73 16.79-14.72 27.99-14.96 4.67 0 9.77 1.13 15.3 3.39 5.53 2.26 9.49 3.39 11.88 3.39 2.15 0 6.07-1.19 11.76-3.57 5.69-2.38 10.59-3.45 14.71-3.21 11.55.72 20.87 4.96 27.97 12.74-25.07 15.15-24.6 37.38.95 51.52.59.36 1.25.77 1.96 1.25-4.28 12.38-10.23 24.38-17.85 36.02zM119.22 31.08c0-7.38 2.65-14.4 7.95-21.07 5.3-6.67 11.96-10.45 19.98-11.35.36 2.02.54 3.99.54 5.91 0 7.37-2.67 14.33-8.01 20.88-5.34 6.55-12.1 10.37-20.28 11.45-.06-1.57-.18-3.51-.18-5.82z" />
-                </svg>
-                <span>Continue with Apple</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSocialLogin('Microsoft')}
-                disabled={isLoading}
-                className="w-full h-[44px] rounded-btn border border-[#E5E7EB] dark:border-white/[0.08] bg-white dark:bg-slate-900/40 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-[#111827] dark:text-[#F8FAFC] text-body font-medium transition-all duration-150 ease-out flex items-center justify-center space-x-3 disabled:opacity-50"
-              >
-                <svg className="w-4 h-4 shrink-0" viewBox="0 0 23 23">
-                  <path fill="#f35325" d="M1 1h10v10H1z" />
-                  <path fill="#81bc06" d="M12 1h10v10H12z" />
-                  <path fill="#05a6f0" d="M1 12h10v10H1z" />
-                  <path fill="#ffba08" d="M12 12h10v10H12z" />
-                </svg>
-                <span>Continue with Microsoft</span>
-              </button>
-            </div>
 
             {/* Footer Sign Up Prompt & Legal */}
             <div className="mt-8 pt-6 border-t border-[#E5E7EB] dark:border-white/[0.06] text-center space-y-3">

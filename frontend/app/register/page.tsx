@@ -20,7 +20,7 @@ import { useAuth } from '@/store/useAuth';
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { setAuth } = useAuth();
+  const { register: registerUser } = useAuth();
 
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -71,15 +71,18 @@ export default function RegisterPage() {
     setIsLoading(true);
     setError('');
 
-    setTimeout(() => {
+    try {
+      const ok = await registerUser(email, username, password);
+      if (ok) {
+        router.push('/dashboard');
+      } else {
+        setError('Registration failed. Please try again.');
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Registration failed. The email may already be in use.');
+    } finally {
       setIsLoading(false);
-      setAuth('demo-access-token-new', {
-        id: 'usr-new',
-        email: email,
-        username: username,
-      });
-      router.push('/dashboard');
-    }, 900);
+    }
   };
 
   return (

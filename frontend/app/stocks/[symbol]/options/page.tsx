@@ -76,6 +76,19 @@ export default function OptionsChainPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-fade-in pb-12">
+      {/* Prominent Demo/Sample Data Alert */}
+      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <ShieldAlert className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>
+            <strong>DEMO / SAMPLE DATA:</strong> Simulated options chain &amp; Open Interest distribution. Real-time NSE derivative feeds require an active broker NFO entitlement.
+          </span>
+        </div>
+        <Badge variant="amber" size="sm">
+          DEMO / SAMPLE DATA
+        </Badge>
+      </div>
+
       {/* Header Card & Navigation Tabs */}
       <Card size="large" className="space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -84,8 +97,11 @@ export default function OptionsChainPage() {
               <h1 className="text-display font-semibold text-slate-900 dark:text-slate-100">
                 {stock.symbol} Options Analytics
               </h1>
+              <Badge variant="amber" size="md">
+                DEMO / SAMPLE DATA
+              </Badge>
               <Badge variant="indigo" size="md">
-                NSE Derivatives
+                NSE Derivatives (Simulated)
               </Badge>
             </div>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">

@@ -74,19 +74,41 @@ function adaptBackendAIToFrontend(backendAI: any, technicals?: any) {
 export default function StockAnalysisPage() {
   const params = useParams();
   const symbol = ((params?.symbol as string) || 'RELIANCE').toUpperCase();
-  const demoStock = DEMO_STOCKS.find((s) => s.symbol === symbol) || DEMO_STOCKS[0];
+  const isDemoAllowed = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+  const matchedDemo = DEMO_STOCKS.find((s) => s.symbol === symbol);
+  const demoStock = matchedDemo || (isDemoAllowed ? DEMO_STOCKS[0] : null);
+
   const [liveStock, setLiveStock] = useState<any>(null);
   const [chartData, setChartData] = useState<any[]>([]);
+  const [notFound, setNotFound] = useState(false);
+  const [watchlisted, setWatchlisted] = useState(false);
 
   useEffect(() => {
     let unsubscribeStream: (() => void) | undefined;
     import('@/lib/api').then(({ api }) => {
+      // Check personal watchlist
+      api.getWatchlist().then((res) => {
+        if (res?.success && Array.isArray(res.items)) {
+          setWatchlisted(res.items.some((item: any) => item.symbol.toUpperCase() === symbol));
+        }
+      }).catch(() => {});
+
       // Fetch Analysis from backend (includes unified market data + AI-assisted quant analysis)
       api.getStockAnalysis(symbol)
         .then(data => {
+          if (!data || data.status === 'unavailable' || data.error) {
+            if (!matchedDemo && !isDemoAllowed) {
+              setNotFound(true);
+            }
+          }
           setLiveStock(data);
         })
-        .catch(err => console.error(err));
+        .catch(err => {
+          console.error(err);
+          if (!matchedDemo && !isDemoAllowed) {
+            setNotFound(true);
+          }
+        });
         
       // Fetch Initial Chart Data
       fetchChartForRange('1M');
@@ -113,6 +135,22 @@ export default function StockAnalysisPage() {
     };
   }, [symbol]);
 
+  const handleToggleWatchlist = async () => {
+    const nextState = !watchlisted;
+    setWatchlisted(nextState);
+    try {
+      const { api } = await import('@/lib/api');
+      if (nextState) {
+        await api.addToWatchlist(symbol, 'NSE');
+      } else {
+        await api.removeFromWatchlist(symbol);
+      }
+    } catch (err) {
+      console.error('Failed to toggle watchlist:', err);
+      setWatchlisted(!nextState);
+    }
+  };
+
   const fetchChartForRange = (range: string) => {
     import('@/lib/api').then(({ api }) => {
       api.getChartData(symbol, range)
@@ -130,9 +168,9 @@ export default function StockAnalysisPage() {
   };
 
   // Prefer live quote from backend or Next.js route; fall back to demo fixture only when DEMO_MODE is true
-  const isDemoAllowed = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
   const resolvedQuote = liveStock?.quote?.price ? liveStock.quote : (liveStock?.live_quote?.price ? liveStock.live_quote : null);
-  const stock = resolvedQuote ? { ...demoStock, ...resolvedQuote } : (isDemoAllowed ? demoStock : { ...demoStock, price: 0, change_pct: 0, is_unavailable: true });
+  const fallbackBase = demoStock || { symbol, name: symbol, sector: 'NSE Equity', price: 0, change_pct: 0, market_cap: '—' };
+  const stock = resolvedQuote ? { ...fallbackBase, ...resolvedQuote } : (isDemoAllowed && demoStock ? demoStock : { ...fallbackBase, price: 0, change_pct: 0, is_unavailable: true });
 
   const riskData = liveStock?.risk;
   const isRiskOk = riskData?.status === 'ok';
@@ -145,7 +183,6 @@ export default function StockAnalysisPage() {
   const ai = (liveStock?.ai_analysis ? adaptBackendAIToFrontend(liveStock.ai_analysis, liveStock.technical) : null) || adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading AI Data...', factors: [], prediction_models: {} })!;
   
   const isUp = stock.change_pct >= 0;
-  const [watchlisted, setWatchlisted] = useState(false);
 
   // Position Sizing Calculator State (defaults to 11,83,500 capital & 1% risk)
   const [calcCapital, setCalcCapital] = useState<number>(1183500);
@@ -257,6 +294,34 @@ export default function StockAnalysisPage() {
 
   const CHART_DATA = chartData;
 
+  if (notFound) {
+    return (
+      <div className="max-w-2xl mx-auto py-16 text-center space-y-4">
+        <div className="p-8 rounded-card border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#121826] shadow-subtle space-y-4">
+          <AlertCircle className="w-12 h-12 text-amber-500 mx-auto" />
+          <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
+            Symbol &apos;{symbol}&apos; Not Found
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            The requested instrument is not currently tracked or could not be located on the National Stock Exchange (NSE).
+          </p>
+          <div className="pt-2 flex justify-center gap-3">
+            <Link href="/dashboard">
+              <Button variant="primary" size="md">
+                Back to Dashboard
+              </Button>
+            </Link>
+            <Link href="/watchlist">
+              <Button variant="outline" size="md">
+                View Watchlist
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
       {/* Top Header Card */}
@@ -300,7 +365,7 @@ export default function StockAnalysisPage() {
             variant={watchlisted ? 'secondary' : 'outline'}
             size="md"
             icon={<Bookmark className={`w-4 h-4 ${watchlisted ? 'fill-current' : ''}`} />}
-            onClick={() => setWatchlisted(!watchlisted)}
+            onClick={handleToggleWatchlist}
           >
             {watchlisted ? 'Watchlisted' : 'Add to Watchlist'}
           </Button>
@@ -440,6 +505,57 @@ export default function StockAnalysisPage() {
                   {sharpeVal}
                 </p>
                 <span className="text-[10px] text-slate-400">Annualised (Rf = 6.5%)</span>
+              </div>
+            </div>
+          </Card>
+
+          {/* Circuit Limits & 52-Week Range (Separated from Circuit Limits) */}
+          <Card size="large" className="space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Circuit Limits &amp; 52-Week Extremes
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Daily circuit limits and annual 52-week extremes mapped independently
+                </p>
+              </div>
+              <Badge variant="neutral" size="sm">
+                NSE Bands
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">Upper Circuit (Band)</span>
+                <p className="text-sm font-semibold text-red-600 dark:text-red-400 mt-1 tabular-nums">
+                  {typeof stock.upper_circuit_limit === 'number' ? `₹${stock.upper_circuit_limit.toFixed(2)}` : 'Unavailable'}
+                </p>
+                <span className="text-[10px] text-slate-400">Exchange daily cap</span>
+              </div>
+
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">Lower Circuit (Band)</span>
+                <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 mt-1 tabular-nums">
+                  {typeof stock.lower_circuit_limit === 'number' ? `₹${stock.lower_circuit_limit.toFixed(2)}` : 'Unavailable'}
+                </p>
+                <span className="text-[10px] text-slate-400">Exchange daily floor</span>
+              </div>
+
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">52-Week High</span>
+                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-1 tabular-nums">
+                  {typeof stock.week52_high === 'number' ? `₹${stock.week52_high.toFixed(2)}` : (typeof stock.high52 === 'number' ? `₹${stock.high52.toFixed(2)}` : 'Unavailable')}
+                </p>
+                <span className="text-[10px] text-slate-400">Annual highest trade</span>
+              </div>
+
+              <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+                <span className="text-caption text-slate-500 font-medium">52-Week Low</span>
+                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-1 tabular-nums">
+                  {typeof stock.week52_low === 'number' ? `₹${stock.week52_low.toFixed(2)}` : (typeof stock.low52 === 'number' ? `₹${stock.low52.toFixed(2)}` : 'Unavailable')}
+                </p>
+                <span className="text-[10px] text-slate-400">Annual lowest trade</span>
               </div>
             </div>
           </Card>

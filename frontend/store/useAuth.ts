@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { authAPI } from '@/lib/api';
+import { authAPI, auth } from '@/lib/api';
 
 interface AuthState {
   isLoggedIn: boolean;
@@ -30,6 +30,7 @@ export const useAuth = create<AuthState>()(
           const response = await authAPI.login(email, password);
           if (response?.access_token) {
             const payload = JSON.parse(atob(response.access_token.split('.')[1]));
+            auth.setToken(response.access_token);
             set({
               isLoggedIn: true,
               token: response.access_token,
@@ -46,7 +47,7 @@ export const useAuth = create<AuthState>()(
         } catch (error) {
           console.error('[useAuth] Login failed:', error);
           set({ isLoggedIn: false, user: null, token: null });
-          return false;
+          throw error;
         }
       },
 
@@ -55,6 +56,7 @@ export const useAuth = create<AuthState>()(
           const response = await authAPI.register(email, username, password);
           if (response?.access_token) {
             const payload = JSON.parse(atob(response.access_token.split('.')[1]));
+            auth.setToken(response.access_token);
             set({
               isLoggedIn: true,
               token: response.access_token,
@@ -71,7 +73,7 @@ export const useAuth = create<AuthState>()(
         } catch (error) {
           console.error('[useAuth] Registration failed:', error);
           set({ isLoggedIn: false, user: null, token: null });
-          return false;
+          throw error;
         }
       },
 
@@ -85,6 +87,7 @@ export const useAuth = create<AuthState>()(
       },
 
       setAuth: (token: string, user: { id: string; email: string; username: string }) => {
+        auth.setToken(token);
         set({
           isLoggedIn: true,
           token,

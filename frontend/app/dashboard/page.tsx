@@ -7,12 +7,10 @@ import {
   TrendingDown,
   Activity,
   ShieldCheck,
-  Bell,
   Briefcase,
-  BarChart3,
-  Cpu,
   AlertTriangle,
   Wifi,
+  ExternalLink,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -21,8 +19,9 @@ import { FinancialChart } from '@/components/ui/FinancialChart';
 import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
 import { api, auth } from '@/lib/api';
 
-const WATCHLIST_SYMBOLS = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK'];
+const DEFAULT_WATCHLIST = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK'];
 const IS_DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+const RANGES = ['1M', '3M', '6M', '1Y'];
 
 function formatIst(iso?: string | null): string {
   if (!iso) return '—';
@@ -42,29 +41,65 @@ function formatIst(iso?: string | null): string {
 export default function DashboardPage() {
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
 
-  // Real market overview & chart state (zero fake fixtures)
+  // Market benchmarks & session telemetry
   const [overview, setOverview] = React.useState<any>(null);
   const [indices, setIndices] = React.useState<any[]>([]);
+
+  // Selected stock chart state
+  const [selectedSymbol, setSelectedSymbol] = React.useState<string>('RELIANCE');
+  const [selectedRange, setSelectedRange] = React.useState<string>('3M');
   const [chartData, setChartData] = React.useState<Array<{ time: string; value: number }>>([]);
   const [chartStatus, setChartStatus] = React.useState<{ ok: boolean; reason?: string; source?: string; asOf?: string | null }>({
     ok: false,
-    reason: 'Loading NIFTY 50 chart series...',
+    reason: 'Loading chart series...',
   });
 
-  // Live SSE watchlist quotes applied directly to React state
+  // Watchlist & quote state
+  const [watchlistSymbols, setWatchlistSymbols] = React.useState<string[]>(DEFAULT_WATCHLIST);
   const [watchlistQuotes, setWatchlistQuotes] = React.useState<Record<string, any>>({});
   const [streamStatus, setStreamStatus] = React.useState<string>('CONNECTING');
   const [lastStreamUpdate, setLastStreamUpdate] = React.useState<string | null>(null);
 
-  // Real portfolio & separated paper ledger state
+  // Portfolio & Paper ledger state
   const [portfolio, setPortfolio] = React.useState<any>(null);
   const [performance, setPerformance] = React.useState<any>(null);
   const [paperSummary, setPaperSummary] = React.useState<{ count: number; openCount: number; filledNotional: number } | null>(null);
 
-  // Real deterministic signals & user alerts
+  // Real deterministic signals & alerts
   const [aiPicks, setAiPicks] = React.useState<any[]>([]);
-  const [alerts, setAlerts] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
+
+  const fetchChart = React.useCallback(async (sym: string, range: string) => {
+    try {
+      const chartRes = await api.getChartData(sym, range).catch(() => null);
+      if (Array.isArray(chartRes) && chartRes.length > 0 && chartRes[0]?.close) {
+        setChartData(
+          chartRes.map((c: any) => ({
+            time: c.date,
+            value: Number(c.close),
+          }))
+        );
+        const lastBar = chartRes[chartRes.length - 1];
+        setChartStatus({
+          ok: true,
+          source: lastBar.source || 'yfinance',
+          asOf: lastBar.date,
+        });
+      } else {
+        setChartData([]);
+        setChartStatus({
+          ok: false,
+          reason: `Historical chart series unavailable for ${sym} (${range}).`,
+        });
+      }
+    } catch {
+      setChartData([]);
+      setChartStatus({
+        ok: false,
+        reason: `Failed to load chart for ${sym}.`,
+      });
+    }
+  }, []);
 
   React.useEffect(() => {
     let isMounted = true;
@@ -73,9 +108,8 @@ export default function DashboardPage() {
 
     async function loadDashboard() {
       try {
-        const [overviewRes, chartRes, picksRes] = await Promise.all([
+        const [overviewRes, picksRes] = await Promise.all([
           api.getMarketOverview().catch(() => null),
-          api.getChartData('RELIANCE', '3M').catch(() => null),
           api.getAIPicks().catch(() => null),
         ]);
 
@@ -88,45 +122,33 @@ export default function DashboardPage() {
           }
         }
 
-        if (Array.isArray(chartRes) && chartRes.length > 0 && chartRes[0]?.close) {
-          setChartData(
-            chartRes.map((c: any) => ({
-              time: c.date,
-              value: Number(c.close),
-            }))
-          );
-          const lastBar = chartRes[chartRes.length - 1];
-          setChartStatus({
-            ok: true,
-            source: lastBar.source || 'yfinance',
-            asOf: lastBar.date,
-          });
-        } else {
-          setChartStatus({
-            ok: false,
-            reason: 'Historical OHLCV chart series unavailable from backend.',
-          });
-        }
-
         if (Array.isArray(picksRes)) {
           setAiPicks(picksRes);
         }
 
+        let userSymbols = DEFAULT_WATCHLIST;
+
         if (authed) {
-          const [portRes, perfRes, alertsRes, paperOrdersRes] = await Promise.all([
+          const [portRes, perfRes, paperOrdersRes, userWatchlistRes] = await Promise.all([
             api.getPortfolio().catch(() => null),
             api.getPortfolioPerformance().catch(() => null),
-            api.getAlerts().catch(() => null),
             fetch('/api/broker/orders?mode=PAPER', { headers: auth.getAuthHeaders() })
               .then((r) => (r.ok ? r.json() : null))
               .catch(() => null),
+            api.getWatchlist().catch(() => null),
           ]);
 
           if (!isMounted) return;
 
           if (portRes) setPortfolio(portRes);
           if (perfRes) setPerformance(perfRes);
-          if (Array.isArray(alertsRes)) setAlerts(alertsRes);
+
+          if (userWatchlistRes?.success && Array.isArray(userWatchlistRes.items) && userWatchlistRes.items.length > 0) {
+            userSymbols = userWatchlistRes.items.map((i: any) => i.symbol.toUpperCase());
+            setWatchlistSymbols(userSymbols);
+            setSelectedSymbol(userSymbols[0]);
+          }
+
           if (paperOrdersRes && Array.isArray(paperOrdersRes.orders)) {
             const pOrders = paperOrdersRes.orders;
             const openCount = pOrders.filter((o: any) => o.status === 'OPEN' || o.status === 'ACCEPTED').length;
@@ -140,6 +162,8 @@ export default function DashboardPage() {
             });
           }
         }
+
+        await fetchChart(userSymbols[0] || 'RELIANCE', selectedRange);
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -147,11 +171,20 @@ export default function DashboardPage() {
 
     loadDashboard();
 
-    // Real-time / delayed quote SSE subscription with state updates & clean unmount cleanup
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchChart]);
+
+  // Real-time price SSE subscription for current watchlist
+  React.useEffect(() => {
+    let isMounted = true;
+    const authed = auth.isAuthenticated();
     let unsub: (() => void) | undefined;
-    if (authed) {
+
+    if (authed && watchlistSymbols.length > 0) {
       unsub = api.subscribePriceStream(
-        WATCHLIST_SYMBOLS,
+        watchlistSymbols,
         (payload: Record<string, any>) => {
           if (!isMounted || !payload || typeof payload !== 'object') return;
           setWatchlistQuotes((prev) => ({ ...prev, ...payload }));
@@ -160,24 +193,28 @@ export default function DashboardPage() {
           const firstEntry = Object.values(payload)[0];
           if (firstEntry?.connection_status === 'CONNECTED' && firstEntry?.freshness === 'LIVE') {
             setStreamStatus('LIVE');
-          } else if (firstEntry?.market_session && firstEntry.market_session !== 'REGULAR' && firstEntry.market_session !== 'SPECIAL_SESSION') {
+          } else if (
+            firstEntry?.market_session &&
+            firstEntry.market_session !== 'REGULAR' &&
+            firstEntry.market_session !== 'SPECIAL_SESSION'
+          ) {
             setStreamStatus('MARKET_CLOSED');
           } else if (firstEntry?.freshness) {
             setStreamStatus(firstEntry.freshness);
           }
 
-          // Update primary RELIANCE chart point in real time when tick arrives
-          const relTick = payload['RELIANCE'];
-          if (relTick && typeof relTick.price === 'number' && relTick.price > 0) {
-            const tickDate = (relTick.as_of || new Date().toISOString()).slice(0, 10);
+          // Update active selected stock chart if live tick arrives
+          const activeTick = payload[selectedSymbol];
+          if (activeTick && typeof activeTick.price === 'number' && activeTick.price > 0) {
+            const tickDate = (activeTick.as_of || new Date().toISOString()).slice(0, 10);
             setChartData((prev) => {
               if (prev.length === 0) return prev;
               const next = [...prev];
               const lastIdx = next.length - 1;
               if (next[lastIdx].time === tickDate) {
-                next[lastIdx] = { time: tickDate, value: Number(relTick.price) };
+                next[lastIdx] = { time: tickDate, value: Number(activeTick.price) };
               } else {
-                next.push({ time: tickDate, value: Number(relTick.price) });
+                next.push({ time: tickDate, value: Number(activeTick.price) });
               }
               return next;
             });
@@ -189,24 +226,34 @@ export default function DashboardPage() {
         }
       );
     } else {
-      setStreamStatus('AUTH_REQUIRED');
+      setStreamStatus(authed ? 'STANDBY' : 'AUTH_REQUIRED');
     }
 
     return () => {
       isMounted = false;
       if (unsub) unsub();
     };
-  }, []);
+  }, [watchlistSymbols, selectedSymbol]);
+
+  const handleSelectSymbol = (sym: string) => {
+    setSelectedSymbol(sym);
+    fetchChart(sym, selectedRange);
+  };
+
+  const handleRangeChange = (range: string) => {
+    setSelectedRange(range);
+    fetchChart(selectedSymbol, range);
+  };
 
   const hasPortfolioData = portfolio && portfolio.status !== 'unavailable' && typeof portfolio.current_value === 'number';
   const totalPnlPositive = (portfolio?.total_pnl ?? 0) >= 0;
-  const indiaVix = indices.find((idx) => idx.name === 'INDIA VIX' || idx.symbol === '^INDIAVIX');
-  const breadth = overview?.advance_decline;
-  const fii = overview?.fii_activity;
-  const dii = overview?.dii_activity;
+  const activeQuote = watchlistQuotes[selectedSymbol];
+  const activePriceAvailable = activeQuote && activeQuote.status !== 'unavailable' && typeof activeQuote.price === 'number';
+  const activeChangePct = activeQuote?.change_percent ?? 0;
+  const isUp = activeChangePct >= 0;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
+    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
       {IS_DEMO_MODE && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -214,22 +261,29 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Top Market Indices */}
+      {/* ── ABOVE THE FOLD SECTION (1440x900 Optimized) ────────────────── */}
+
+      {/* 1. Market Telemetry & Benchmarks Strip */}
       <section>
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <h2 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            NSE / Market Benchmarks {overview?.market_session ? `• Session: ${overview.market_session}` : ''}
-          </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              NSE Market Telemetry
+            </h2>
+            <Badge variant="neutral" size="sm">
+              Session: {overview?.market_session || 'REGULAR (09:15-15:30 IST)'}
+            </Badge>
+          </div>
           <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <Wifi className="w-3.5 h-3.5" />
-            <span>Stream: {streamStatus}</span>
-            {lastStreamUpdate && <span>• Last event {formatIst(lastStreamUpdate)}</span>}
+            <Wifi className="w-3.5 h-3.5 text-indigo-500" />
+            <span>Feed: <strong>{streamStatus}</strong></span>
+            {lastStreamUpdate && <span>• Last tick {formatIst(lastStreamUpdate)}</span>}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {indices.length === 0 ? (
-            <Card size="standard" className="sm:col-span-2 lg:col-span-4 text-xs text-slate-500">
+            <Card size="standard" className="sm:col-span-2 lg:col-span-4 text-xs text-slate-500 py-3">
               {loading ? 'Loading benchmark indices...' : 'Benchmark indices unavailable from market feed.'}
             </Card>
           ) : (
@@ -237,9 +291,9 @@ export default function DashboardPage() {
               const unavailable = idx.status === 'unavailable' || idx.value === null;
               const isPositive = (idx.change ?? 0) >= 0;
               return (
-                <Card key={idx.name} size="standard" className="flex flex-col justify-between">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-caption font-medium text-slate-500 dark:text-slate-400">
+                <Card key={idx.name} size="standard" className="flex flex-col justify-between py-2.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-caption font-medium text-slate-500 dark:text-slate-400 truncate">
                       {idx.name}
                     </span>
                     <FreshnessBadge
@@ -248,11 +302,11 @@ export default function DashboardPage() {
                       source={idx.source}
                     />
                   </div>
-                  <div className="mt-2 flex items-baseline justify-between">
-                    <span className="text-xl font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                      {unavailable ? 'Unavailable' : Number(idx.value).toLocaleString('en-IN')}
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-base font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                      {unavailable ? 'Unavailable' : idx.value?.toLocaleString('en-IN')}
                     </span>
-                    {!unavailable && idx.change_percent !== null && (
+                    {!unavailable && typeof idx.change === 'number' && (
                       <span
                         className={`text-xs font-medium tabular-nums ${
                           isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
@@ -264,7 +318,7 @@ export default function DashboardPage() {
                       </span>
                     )}
                   </div>
-                  <span className="mt-1 text-[11px] text-slate-400">
+                  <span className="mt-0.5 text-[10px] text-slate-400 truncate">
                     {unavailable ? idx.reason || 'Unavailable' : `Source: ${idx.source} • ${formatIst(idx.as_of)}`}
                   </span>
                 </Card>
@@ -274,73 +328,170 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Live Watchlist Stream Strip */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            Live Watchlist Tape
-          </h3>
-          {!isAuthenticated && (
-            <Link href="/login" className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
-              Sign in to stream per-user quotes
+      {/* 2. Interactive Focus Chart Card */}
+      <Card size="large" className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-white/[0.06] pb-3">
+          <div>
+            <div className="flex items-center space-x-2.5">
+              <span className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                {selectedSymbol}
+              </span>
+              <Badge variant="indigo" size="sm">
+                NSE Equity
+              </Badge>
+              <FreshnessBadge
+                status={activeQuote?.freshness || 'DELAYED'}
+                asOf={activeQuote?.as_of}
+                source={activeQuote?.source || 'yfinance'}
+              />
+            </div>
+            <div className="mt-1 flex items-baseline space-x-3">
+              <span className="text-2xl font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                {activePriceAvailable
+                  ? `₹${Number(activeQuote.price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                  : 'Awaiting Quote'}
+              </span>
+              {activePriceAvailable && typeof activeQuote.change_percent === 'number' && (
+                <span
+                  className={`text-sm font-semibold tabular-nums ${
+                    isUp ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+                  }`}
+                >
+                  {isUp ? '+' : ''}
+                  {activeChangePct.toFixed(2)}% Today
+                </span>
+              )}
+              {activeQuote?.as_of && (
+                <span className="text-[11px] text-slate-400">
+                  Observed: {formatIst(activeQuote.as_of)}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Chart Period Selector Buttons */}
+          <div className="flex items-center space-x-1.5 self-start sm:self-auto">
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => handleRangeChange(r)}
+                className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                  selectedRange === r
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+            <Link href={`/stocks/${selectedSymbol}`}>
+              <Button variant="outline" size="sm" className="ml-2">
+                Full Analysis <ExternalLink className="w-3 h-3 ml-1" />
+              </Button>
             </Link>
-          )}
+          </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          {WATCHLIST_SYMBOLS.map((sym) => {
+
+        {/* Financial Chart Canvas */}
+        <div>
+          {chartData.length > 0 ? (
+            <FinancialChart data={chartData} height={260} isPositive={isUp} />
+          ) : (
+            <div className="h-[260px] rounded-xl border border-dashed border-slate-200 dark:border-slate-800 flex flex-col items-center justify-center text-sm text-slate-500">
+              <span>{chartStatus.reason || 'Chart data loading...'}</span>
+            </div>
+          )}
+          <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+            <span>Historical series: {selectedSymbol} ({selectedRange}) • Daily close</span>
+            <span>Source: {chartStatus.source || 'yfinance'} • Not investment advice</span>
+          </div>
+        </div>
+      </Card>
+
+      {/* 3. Personal Watchlist Tape Strip */}
+      <section>
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center space-x-2">
+            <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              Personal Watchlist Tape (Click to chart)
+            </h3>
+            <Badge variant="neutral" size="sm">
+              {watchlistSymbols.length} Symbols
+            </Badge>
+          </div>
+          <Link href="/watchlist" className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+            Manage Watchlist →
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {watchlistSymbols.map((sym) => {
             const q = watchlistQuotes[sym];
             const available = q && q.status !== 'unavailable' && typeof q.price === 'number';
             const chgPct = q?.change_percent ?? 0;
+            const isSelected = selectedSymbol === sym;
+
             return (
-              <Link key={sym} href={`/stocks/${sym}`}>
-                <Card size="standard" className="hover:border-indigo-500/40 transition-colors cursor-pointer">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">{sym}</span>
-                    <FreshnessBadge status={q?.freshness || 'UNAVAILABLE'} asOf={q?.as_of} source={q?.source} />
-                  </div>
-                  <div className="mt-2 flex items-baseline justify-between">
-                    <span className="text-base font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                      {available ? `₹${Number(q.price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'Unavailable'}
+              <div
+                key={sym}
+                onClick={() => handleSelectSymbol(sym)}
+                className={`p-3 rounded-card border transition-all cursor-pointer ${
+                  isSelected
+                    ? 'border-indigo-600 ring-2 ring-indigo-500/20 bg-indigo-50/40 dark:bg-indigo-950/20'
+                    : 'border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#121826] hover:border-indigo-400/50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs text-slate-900 dark:text-slate-100">{sym}</span>
+                  <FreshnessBadge status={q?.freshness || 'DELAYED'} asOf={q?.as_of} source={q?.source} />
+                </div>
+                <div className="mt-1.5 flex items-baseline justify-between">
+                  <span className="text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums">
+                    {available ? `₹${Number(q.price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </span>
+                  {available && typeof q.change_percent === 'number' && (
+                    <span
+                      className={`text-xs font-semibold tabular-nums ${
+                        chgPct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+                      }`}
+                    >
+                      {chgPct >= 0 ? '+' : ''}
+                      {chgPct.toFixed(2)}%
                     </span>
-                    {available && typeof q.change_percent === 'number' && (
-                      <span
-                        className={`text-xs font-medium tabular-nums ${
-                          chgPct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-                        }`}
-                      >
-                        {chgPct >= 0 ? '+' : ''}
-                        {chgPct}%
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1 text-[11px] text-slate-400 truncate">
-                    {available ? `${q.source} • ${formatIst(q.as_of)}` : q?.reason || 'Awaiting tick'}
-                  </p>
-                </Card>
-              </Link>
+                  )}
+                </div>
+                <p className="mt-1 text-[10px] text-slate-400 truncate">
+                  {available ? `${q.source} • ${formatIst(q.as_of)}` : 'Awaiting quote'}
+                </p>
+              </div>
             );
           })}
         </div>
       </section>
 
-      {/* Main Two-Column Analytical Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card size="large" className="lg:col-span-2 flex flex-col justify-between space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* ── BELOW THE FOLD SECTION (Portfolio & Paper Trading Ledger) ──── */}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 pt-2">
+        {/* Portfolio & Paper Blotter Card */}
+        <Card size="large" className="lg:col-span-2 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-white/[0.06] pb-4">
             <div>
               <div className="flex items-center space-x-2">
                 <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-                  Portfolio &amp; Paper Ledger
+                  Portfolio &amp; Paper Blotter
                 </h2>
-                <Badge variant="neutral">Account &amp; Paper Separated</Badge>
+                <Badge variant="indigo" size="sm">
+                  PAPER TRADING (Simulated)
+                </Badge>
               </div>
               <div className="mt-2 flex items-baseline space-x-3">
-                <span className="text-3xl font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                <span className="text-2xl font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
                   {hasPortfolioData
                     ? `₹${Number(portfolio.current_value).toLocaleString('en-IN')}`
                     : isAuthenticated
-                    ? 'No broker portfolio holdings'
-                    : 'Sign in required'}
+                    ? 'No live broker portfolio holdings'
+                    : 'Sign in to view account'}
                 </span>
                 {hasPortfolioData && typeof portfolio.total_pnl === 'number' && (
                   <span
@@ -355,266 +506,143 @@ export default function DashboardPage() {
                 )}
               </div>
               {paperSummary && (
-                <p className="mt-1 text-xs text-indigo-600 dark:text-indigo-400">
-                  PAPER LEDGER (Simulated): {paperSummary.count} orders ({paperSummary.openCount} open) • Filled Notional ₹
+                <p className="mt-1 text-xs text-indigo-600 dark:text-indigo-400 font-medium">
+                  PAPER LEDGER: {paperSummary.count} simulated orders ({paperSummary.openCount} open) • Filled Notional ₹
                   {paperSummary.filledNotional.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                 </p>
               )}
             </div>
+
             <div className="flex space-x-2">
               <Link href="/orders">
-                <Button variant="secondary" size="sm">
-                  Orders &amp; Paper Trade
+                <Button variant="primary" size="sm">
+                  Paper Order Blotter
                 </Button>
               </Link>
               <Link href="/portfolio">
-                <Button variant="primary" size="sm">
-                  View Portfolio
+                <Button variant="outline" size="sm">
+                  Portfolio Details
                 </Button>
               </Link>
             </div>
           </div>
 
-          {/* Real RELIANCE Historical Chart + Live Stream Append */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-slate-500">
-                RELIANCE (NSE) 3M Historical Close
-              </span>
-              {chartStatus.ok && (
-                <span className="text-[11px] text-slate-400">
-                  Source: {chartStatus.source} • As of {chartStatus.asOf}
-                </span>
-              )}
-            </div>
-            {chartData.length > 0 ? (
-              <FinancialChart data={chartData} height={260} isPositive={true} />
-            ) : (
-              <div className="h-[260px] rounded-xl border border-dashed border-slate-200 dark:border-slate-800 flex flex-col items-center justify-center text-sm text-slate-500">
-                <span>{chartStatus.reason || 'Chart data unavailable'}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Account Performance Metrics (strictly from real API or Unavailable) */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-slate-100 dark:border-slate-800">
-            <div>
-              <span className="text-caption text-slate-500">Win Rate</span>
+          {/* Performance Metrics (Verified API data or explicit Unavailable) */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+              <span className="text-caption text-slate-500 font-medium">Win Rate</span>
               <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
                 {typeof performance?.win_rate === 'number' ? `${performance.win_rate}%` : 'Unavailable'}
               </p>
+              <span className="text-[10px] text-slate-400">Closed paper trades</span>
             </div>
-            <div>
-              <span className="text-caption text-slate-500">Profit Factor</span>
+            <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+              <span className="text-caption text-slate-500 font-medium">Profit Factor</span>
               <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
                 {typeof performance?.profit_factor === 'number' ? performance.profit_factor : 'Unavailable'}
               </p>
+              <span className="text-[10px] text-slate-400">Gross wins / gross losses</span>
             </div>
-            <div>
-              <span className="text-caption text-slate-500">CAGR</span>
+            <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+              <span className="text-caption text-slate-500 font-medium">Annualised CAGR</span>
               <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
                 {typeof performance?.cagr === 'number' ? `${performance.cagr}%` : 'Unavailable'}
               </p>
+              <span className="text-[10px] text-slate-400">Compounded return</span>
             </div>
-            <div>
-              <span className="text-caption text-slate-500">Max Drawdown</span>
-              <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+            <div className="p-3 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06]">
+              <span className="text-caption text-slate-500 font-medium">Max Drawdown</span>
+              <p className="mt-1 text-sm font-semibold text-red-600 dark:text-red-400 tabular-nums">
                 {typeof performance?.max_drawdown === 'number' ? `${performance.max_drawdown}%` : 'Unavailable'}
               </p>
+              <span className="text-[10px] text-slate-400">Peak-to-trough decline</span>
             </div>
           </div>
         </Card>
 
-        {/* Market Breadth & Macro Context Column */}
-        <div className="space-y-6">
-          <Card>
-            <div className="flex items-center justify-between mb-4">
+        {/* Market Breadth & Flow Context Card */}
+        <div className="space-y-4">
+          <Card size="standard">
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-2">
-                <Activity className="w-4 h-4 text-slate-400" />
-                <h3 className="text-h3 font-semibold text-slate-900 dark:text-slate-100">
+                <Activity className="w-4 h-4 text-indigo-500" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                   Market Breadth &amp; Flows
                 </h3>
               </div>
-              <Badge variant="neutral">NSE</Badge>
+              <Badge variant="neutral" size="sm">NSE</Badge>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <span className="text-slate-500">Constituent Breadth</span>
+            <div className="space-y-2.5 text-xs">
+              <div className="flex items-center justify-between p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                <span className="text-slate-500">Advance / Decline</span>
                 <span className="font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                  {breadth?.status === 'ok'
-                    ? `${breadth.advances} Adv / ${breadth.declines} Dec (n=${breadth.sample_size})`
+                  {overview?.advance_decline?.status === 'ok'
+                    ? `${overview.advance_decline.advances} Adv / ${overview.advance_decline.declines} Dec`
                     : 'Unavailable'}
                 </span>
               </div>
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <span className="text-slate-500">FII Cash Flow</span>
+              <div className="flex items-center justify-between p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                <span className="text-slate-500">FII Net Cash</span>
                 <span className="font-medium text-slate-700 dark:text-slate-300">
-                  {fii?.status === 'unavailable' || fii?.net_cr === null
+                  {overview?.fii_activity?.status === 'unavailable' || overview?.fii_activity?.net_cr === null
                     ? 'Unavailable'
-                    : `₹${fii?.net_cr} Cr`}
+                    : `₹${overview?.fii_activity?.net_cr} Cr`}
                 </span>
               </div>
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <span className="text-slate-500">DII Cash Flow</span>
+              <div className="flex items-center justify-between p-2 rounded bg-slate-50 dark:bg-slate-800/50">
+                <span className="text-slate-500">DII Net Cash</span>
                 <span className="font-medium text-slate-700 dark:text-slate-300">
-                  {dii?.status === 'unavailable' || dii?.net_cr === null
+                  {overview?.dii_activity?.status === 'unavailable' || overview?.dii_activity?.net_cr === null
                     ? 'Unavailable'
-                    : `₹${dii?.net_cr} Cr`}
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50">
-                <span className="text-slate-500">INDIA VIX</span>
-                <span className="font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                  {indiaVix && indiaVix.status !== 'unavailable' && indiaVix.value !== null
-                    ? Number(indiaVix.value).toFixed(2)
-                    : 'Unavailable'}
+                    : `₹${overview?.dii_activity?.net_cr} Cr`}
                 </span>
               </div>
             </div>
+            <p className="mt-3 text-[10px] text-slate-400">
+              Flow data published daily by NSE EOD reports. Not intraday signals.
+            </p>
           </Card>
 
-          <Card>
+          {/* AI Deterministic Picks */}
+          <Card size="standard">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-2">
-                <ShieldCheck className="w-4 h-4 text-slate-400" />
-                <h3 className="text-h3 font-semibold text-slate-900 dark:text-slate-100">
-                  Execution Safeguards
+                <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  Deterministic Quant Signals
                 </h3>
               </div>
+              <Badge variant="emerald" size="sm">Rule v1.0</Badge>
             </div>
-            <ul className="space-y-2 text-xs text-slate-600 dark:text-slate-400">
-              <li>• Live real-money order routing gated behind explicit confirmation.</li>
-              <li>• Orders validate server-side quote freshness &amp; observation time.</li>
-              <li>• Signals require deterministic rule consensus + completed OHLCV bars.</li>
-            </ul>
-            <div className="mt-4 flex gap-2">
-              <Link href="/orders" className="flex-1">
-                <Button variant="secondary" size="sm" className="w-full">
-                  Order Blotter
-                </Button>
-              </Link>
-              <Link href="/signals" className="flex-1">
-                <Button variant="secondary" size="sm" className="w-full">
-                  Signal Ledger
-                </Button>
-              </Link>
-            </div>
-          </Card>
-        </div>
-      </div>
 
-      {/* Deterministic Signals & Alerts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <Cpu className="w-4 h-4 text-slate-400" />
-              <h3 className="text-h3 font-semibold text-slate-900 dark:text-slate-100">
-                Deterministic Signals
-              </h3>
-            </div>
-            <Link href="/signals" className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
-              Signal Ledger
-            </Link>
-          </div>
-
-          <div className="space-y-3">
             {aiPicks.length === 0 ? (
-              <p className="text-xs text-slate-500">
-                {loading ? 'Evaluating deterministic rules...' : 'Signals unavailable — market quotes or OHLCV missing.'}
+              <p className="text-xs text-slate-500 py-2">
+                No active quant signals generated for current filter thresholds.
               </p>
             ) : (
-              aiPicks.slice(0, 4).map((pick) => {
-                const unavail = pick.status === 'unavailable';
-                return (
+              <div className="space-y-2">
+                {aiPicks.slice(0, 3).map((pick: any) => (
                   <Link key={pick.symbol} href={`/stocks/${pick.symbol}`}>
-                    <div className="p-3 rounded-lg border border-slate-100 dark:border-slate-800 hover:border-indigo-500/40 transition-colors flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">{pick.symbol}</span>
-                          {unavail ? (
-                            <Badge variant="neutral">UNAVAILABLE</Badge>
-                          ) : (
-                            <Badge variant={(pick.signal || 'hold').toLowerCase() as any}>
-                              {pick.signal}
-                            </Badge>
-                          )}
-                          <FreshnessBadge status={pick.freshness || 'UNAVAILABLE'} asOf={pick.as_of} source={pick.source} />
-                        </div>
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          {unavail
-                            ? pick.reason || 'Quote or OHLCV unavailable'
-                            : `Target ₹${pick.target} • SL ₹${pick.stop_loss} • Rule: ${pick.rule_version}`}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                          {typeof pick.price === 'number' ? `₹${pick.price.toLocaleString('en-IN')}` : '—'}
-                        </span>
-                        <p className="text-[11px] text-slate-400">
-                          {pick.confidence ? `Conf ${pick.confidence}%` : 'Not investment advice'}
-                        </p>
+                    <div className="p-2 rounded bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between text-xs transition-colors">
+                      <span className="font-semibold text-slate-900 dark:text-slate-100">{pick.symbol}</span>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={pick.signal?.toLowerCase() === 'buy' ? 'emerald' : 'amber'} size="sm">
+                          {pick.signal} ({pick.confidence}%)
+                        </Badge>
+                        <span className="text-[11px] text-slate-400">Target ₹{pick.target}</span>
                       </div>
                     </div>
                   </Link>
-                );
-              })
+                ))}
+              </div>
             )}
-          </div>
-        </Card>
-
-        <Card>
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-2">
-              <Bell className="w-4 h-4 text-slate-400" />
-              <h3 className="text-h3 font-semibold text-slate-900 dark:text-slate-100">
-                Alerts
-              </h3>
-            </div>
-            <Link href="/alerts" className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
-              Manage Alerts
-            </Link>
-          </div>
-          {!isAuthenticated ? (
-            <p className="text-xs text-slate-500">Sign in to load your active price and signal alerts.</p>
-          ) : alerts.length === 0 ? (
-            <p className="text-xs text-slate-500">No active alerts configured for this account.</p>
-          ) : (
-            <div className="space-y-2.5">
-              {alerts.slice(0, 4).map((al: any, idx: number) => (
-                <div
-                  key={al.id || idx}
-                  className="p-3 rounded-lg border border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs"
-                >
-                  <div>
-                    <span className="font-semibold text-slate-900 dark:text-slate-100">{al.symbol}</span>
-                    <span className="ml-2 text-slate-500">{al.message || al.condition}</span>
-                  </div>
-                  <Badge variant={al.is_triggered ? 'emerald' : 'neutral'}>
-                    {al.is_triggered ? 'Triggered' : 'Active'}
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-
-      {/* Global Regulatory Disclaimer per AGENTS.md Rule 7 */}
-      <footer className="pt-4 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <span>
-          All prices and quantitative rule outputs display source and observation timestamp. Not investment advice; equity investments are subject to market risk.
-        </span>
-        <div className="flex space-x-4">
-          <Link href="/backtest" className="hover:underline flex items-center gap-1">
-            <BarChart3 className="w-3 h-3" /> Backtest Engine
-          </Link>
-          <Link href="/data-sources" className="hover:underline flex items-center gap-1">
-            <Briefcase className="w-3 h-3" /> Data Sources
-          </Link>
+            <p className="mt-3 text-[10px] text-slate-400">
+              Rules: 20/50 SMA trend, 14-period RSI band, MACD expansion, volume surge. Not investment advice.
+            </p>
+          </Card>
         </div>
-      </footer>
+      </div>
     </div>
   );
 }

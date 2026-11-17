@@ -1,38 +1,124 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/security/crypto';
-import { getVerifiedUserId } from '@/lib/auth/session';
+import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
 import crypto from 'node:crypto';
 
 export async function GET(req: Request) {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
   try {
     const { searchParams } = new URL(req.url);
     const requestToken = searchParams.get('request_token');
-    const stateUserId = searchParams.get('state');
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const stateParam = searchParams.get('state');
 
     if (!requestToken) {
       return NextResponse.redirect(`${baseUrl}/settings?broker_error=Missing+request_token`);
     }
 
-    // Determine authenticated user: prefer verified session header/cookie, fallback to state passed during login
-    let userId: string;
-    try {
-      userId = getVerifiedUserId(req);
-    } catch {
-      if (stateUserId && stateUserId.trim()) {
-        userId = stateUserId.trim();
-      } else {
-        return NextResponse.redirect(`${baseUrl}/settings?broker_error=Unauthenticated+broker+callback`);
-      }
+    if (!stateParam) {
+      return NextResponse.redirect(`${baseUrl}/settings?broker_error=Missing+OAuth+state+parameter`);
     }
 
+    // 1. Enforce authenticated app session
+    let sessionUserId: string;
+    try {
+      sessionUserId = getVerifiedUserId(req);
+    } catch (authErr) {
+      return NextResponse.redirect(`${baseUrl}/login?next=${encodeURIComponent('/settings')}`);
+    }
+
+    // 2. Validate cookie state matches param if cookie present
+    const cookieHeader = req.headers.get('cookie') || '';
+    const cookieMatch = cookieHeader.match(/(?:^|;\s*)kite_oauth_state=([^;]+)/);
+    const stateCookie = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+
+    if (stateCookie && stateCookie !== stateParam) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('OAuth state mismatch (cross-site request detected)')}`
+      );
+    }
+
+    // 3. Cryptographically verify state HMAC signature
+    const secretKey = process.env.SECRET_KEY;
+    if (!secretKey) {
+      throw new Error('SECRET_KEY is not configured on the server');
+    }
+
+    const parts = stateParam.split('.');
+    if (parts.length !== 2) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Malformed OAuth state format')}`
+      );
+    }
+
+    const [payloadB64, signatureB64] = parts;
+    const expectedSig = crypto.createHmac('sha256', secretKey).update(payloadB64).digest('base64url');
+
+    const expectedBuf = Buffer.from(expectedSig);
+    const actualBuf = Buffer.from(signatureB64);
+    if (expectedBuf.length !== actualBuf.length || !crypto.timingSafeEqual(expectedBuf, actualBuf)) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Forged or corrupted OAuth state signature')}`
+      );
+    }
+
+    // 4. Decode payload and check expiration
+    let payload: { userId: string; nonce: string; exp: number };
+    try {
+      payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    } catch {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Invalid OAuth state payload encoding')}`
+      );
+    }
+
+    if (!payload.userId || !payload.nonce || !payload.exp) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Incomplete OAuth state claims')}`
+      );
+    }
+
+    if (Date.now() > payload.exp) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('OAuth state has expired (10 minute limit)')}`
+      );
+    }
+
+    // 5. Account isolation: verify state belongs to the active session user
+    if (payload.userId !== sessionUserId) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Cross-account broker link attempt rejected')}`
+      );
+    }
+
+    // 6. Single-use replay protection check via database
+    try {
+      const stateRecord = await prisma.oAuthState.findUnique({
+        where: { nonce: payload.nonce },
+      });
+
+      if (stateRecord) {
+        if (stateRecord.used) {
+          return NextResponse.redirect(
+            `${baseUrl}/settings?broker_error=${encodeURIComponent('Replay attack detected: OAuth state has already been used')}`
+          );
+        }
+        await prisma.oAuthState.update({
+          where: { nonce: payload.nonce },
+          data: { used: true },
+        });
+      }
+    } catch (dbErr) {
+      console.warn('[broker/kite/callback] Replay check DB lookup warning:', dbErr);
+    }
+
+    // 7. Exchange request_token server-side
     const apiKey = process.env.KITE_API_KEY;
     const apiSecret = process.env.KITE_API_SECRET;
     let accessToken = `sess_kite_${Date.now()}_${crypto.randomUUID().replace(/-/g, '').substring(0, 9)}`;
 
     if (apiKey && apiSecret) {
-      // Exchange request_token server-side using SHA-256(api_key + request_token + api_secret)
       const checksum = crypto
         .createHash('sha256')
         .update(apiKey + requestToken + apiSecret)
@@ -55,13 +141,17 @@ export async function GET(req: Request) {
       if (data.status === 'success' && data.data.access_token) {
         accessToken = data.data.access_token;
       } else {
-        return NextResponse.redirect(`${baseUrl}/settings?broker_error=${encodeURIComponent(data.message || 'Token exchange failed')}`);
+        return NextResponse.redirect(
+          `${baseUrl}/settings?broker_error=${encodeURIComponent(data.message || 'Token exchange failed')}`
+        );
       }
     } else if (process.env.KITE_SANDBOX !== 'true') {
-      return NextResponse.redirect(`${baseUrl}/settings?broker_error=${encodeURIComponent('Kite API keys not configured and KITE_SANDBOX is false')}`);
+      return NextResponse.redirect(
+        `${baseUrl}/settings?broker_error=${encodeURIComponent('Kite API keys not configured and KITE_SANDBOX is false')}`
+      );
     }
 
-    // Encrypt token at rest
+    // 8. Encrypt token at rest and persist to PostgreSQL
     const encryptedAccessToken = encryptToken(accessToken);
 
     // Kite Connect tokens expire daily at ~07:30 AM next day
@@ -70,7 +160,7 @@ export async function GET(req: Request) {
     expiresAt.setHours(7, 30, 0, 0);
 
     await prisma.brokerConnection.upsert({
-      where: { user_id: userId },
+      where: { user_id: sessionUserId },
       update: {
         broker: 'KITE',
         access_token: encryptedAccessToken,
@@ -79,7 +169,7 @@ export async function GET(req: Request) {
         status: 'CONNECTED',
       },
       create: {
-        user_id: userId,
+        user_id: sessionUserId,
         broker: 'KITE',
         access_token: encryptedAccessToken,
         token_expires_at: expiresAt,
@@ -88,10 +178,14 @@ export async function GET(req: Request) {
       },
     });
 
-    return NextResponse.redirect(`${baseUrl}/settings?broker_connected=true`);
+    const response = NextResponse.redirect(`${baseUrl}/settings?broker_connected=true`);
+    // Clear oauth state cookie
+    response.headers.set('Set-Cookie', 'kite_oauth_state=; Path=/api/broker/kite; Max-Age=0; HttpOnly; SameSite=Lax');
+    return response;
   } catch (err: any) {
     console.error('[Kite Callback Error]', err);
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    return NextResponse.redirect(`${baseUrl}/settings?broker_error=${encodeURIComponent(err.message)}`);
+    return NextResponse.redirect(
+      `${baseUrl}/settings?broker_error=${encodeURIComponent(err.message || 'Broker connection failed')}`
+    );
   }
 }

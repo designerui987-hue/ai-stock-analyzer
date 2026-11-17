@@ -25,12 +25,15 @@ export const auth = {
   setToken: (token: string) => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('auth_token', token);
+      const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+      document.cookie = `auth_token=${encodeURIComponent(token)}; path=/; max-age=604800; SameSite=Lax${secure}`;
     }
   },
 
   removeToken: () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('auth_token');
+      document.cookie = 'auth_token=; path=/; max-age=0; SameSite=Lax';
     }
   },
 
@@ -102,9 +105,18 @@ export async function fetchAPI(endpoint: string, options?: RequestInit) {
     }
 
     if (!res.ok) {
-      const errorText = await res.text();
-      console.error(`API Error [${endpoint}]: ${res.status} - ${errorText}`);
-      throw new Error(`API error: ${res.status}`);
+      let errorMsg = `API error: ${res.status}`;
+      try {
+        const errorJson = await res.clone().json();
+        if (errorJson?.detail) {
+          errorMsg = typeof errorJson.detail === 'string' ? errorJson.detail : JSON.stringify(errorJson.detail);
+        }
+      } catch {
+        const errorText = await res.text().catch(() => '');
+        if (errorText) errorMsg = errorText;
+      }
+      console.error(`API Error [${endpoint}]: ${res.status} - ${errorMsg}`);
+      throw new Error(errorMsg);
     }
     
     return res.json();
@@ -216,4 +228,16 @@ export const api = {
   getAlerts: () => fetchAPI('/api/alerts/'),
   getUnreadCount: () => fetchAPI('/api/alerts/unread-count'),
   getInsights: () => fetchAPI('/api/alerts/insights'),
+
+  // Watchlist (Persisted per-user in PostgreSQL)
+  getWatchlist: () => fetchAPI('/api/watchlist'),
+  addToWatchlist: (symbol: string, exchange: string = 'NSE', notes?: string) =>
+    fetchAPI('/api/watchlist', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, exchange, notes }),
+    }),
+  removeFromWatchlist: (symbol: string) =>
+    fetchAPI(`/api/watchlist?symbol=${encodeURIComponent(symbol)}`, {
+      method: 'DELETE',
+    }),
 };

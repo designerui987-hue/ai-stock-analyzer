@@ -91,3 +91,26 @@ model OrderLog {
   @@unique([user_id, idempotency_key])
   @@index([user_id, mode, placed_at])
 }
+
+model OAuthState {
+  id         String   @id @default(uuid())
+  user_id    String
+  nonce      String   @unique
+  expires_at DateTime
+  used       Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  @@index([user_id, expires_at])
+}
+
+model WatchlistItem {
+  id        String   @id @default(uuid())
+  user_id   String
+  symbol    String
+  exchange  String   @default("NSE")
+  notes     String?
+  added_at  DateTime @default(now())
+
+  @@unique([user_id, symbol])
+  @@index([user_id])
+}

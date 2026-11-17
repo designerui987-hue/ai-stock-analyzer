@@ -2,77 +2,20 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { Send, Bot, Sparkles, ShieldCheck, ArrowRight, CornerDownLeft } from 'lucide-react';
-import { Card } from '@/components/ui/Card';
+import { Send, Bot, ShieldCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
+import { api, auth } from '@/lib/api';
 
-const AI_DATA: Record<string, any> = {
-  RELIANCE: {
-    signal: 'BUY',
-    confidence: 84,
-    risk: 'Low',
-    entry: 2450,
-    target: 2780,
-    stopLoss: 2310,
-    price: 2487.35,
-    reasons: [
-      'Strong 18% YoY earnings beat in latest quarterly report',
-      'Bullish MACD crossover on daily chart with rising volume',
-      'New energy investments creating long-term structural growth',
-    ],
-  },
-  TCS: {
-    signal: 'HOLD',
-    confidence: 63,
-    risk: 'Medium',
-    entry: 3800,
-    target: 4150,
-    stopLoss: 3640,
-    price: 3892.5,
-    reasons: [
-      'Revenue growth moderating due to macro IT spending slowdown',
-      'Valuation at 32x P/E slightly elevated vs near-term guidance',
-      'Consolidating in tight range — wait for directional breakout',
-    ],
-  },
-  HDFCBANK: {
-    signal: 'BUY',
-    confidence: 79,
-    risk: 'Low',
-    entry: 1620,
-    target: 1870,
-    stopLoss: 1545,
-    price: 1645.8,
-    reasons: [
-      'NIM expansion expected from anticipated RBI monetary easing',
-      'Strong 18% loan book growth with pristine credit metrics',
-    ],
-  },
-};
-
-function getAI(symbol: string) {
-  return AI_DATA[symbol.toUpperCase()] || null;
-}
-
-function extractSymbol(text: string): string | null {
-  const upper = text.toUpperCase();
-  const known = Object.keys(AI_DATA);
-  return known.find((s) => upper.includes(s)) || null;
-}
-
-const SUGGESTIONS = [
+const DEFAULT_SUGGESTIONS = [
   'Should I buy Reliance today?',
-  'Analyze TCS technical structure',
-  'Top stock picks in NIFTY 50',
-  'Evaluate HDFC Bank entry price',
+  'Analyze TCS stock in detail',
+  'Top AI stock picks for today',
+  'Market overview',
 ];
 
 interface Msg {
   role: 'user' | 'assistant';
   content: string;
-  stockCard?: any;
-  symbol?: string;
 }
 
 export default function AssistantPage() {
@@ -80,11 +23,12 @@ export default function AssistantPage() {
     {
       role: 'assistant',
       content:
-        "Hello! I'm your institutional AI Market Copilot. Ask me to evaluate any stock, analyze technical patterns, or check portfolio risk.",
+        "Hello! I am your AI Market Assistant for Indian equities. Ask me about any NIFTY 50 stock, deterministic quantitative signals, or market overview.\n\n*Notice: All analytics provided are for educational purposes and do not constitute investment advice.*",
     },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>(DEFAULT_SUGGESTIONS);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -97,30 +41,50 @@ export default function AssistantPage() {
     setInput('');
     setLoading(true);
 
-    await new Promise((r) => setTimeout(r, 700));
+    try {
+      if (!auth.isAuthenticated()) {
+        setMsgs((m) => [
+          ...m,
+          {
+            role: 'assistant',
+            content: '⚠️ Please sign in to communicate with the AI Market Assistant.',
+          },
+        ]);
+        return;
+      }
 
-    const sym = extractSymbol(text);
-    if (sym) {
-      const ai = getAI(sym);
+      const res = await api.sendMessage(text);
+      if (res && res.response) {
+        setMsgs((m) => [
+          ...m,
+          {
+            role: 'assistant',
+            content: res.response,
+          },
+        ]);
+        if (Array.isArray(res.suggestions) && res.suggestions.length > 0) {
+          setSuggestions(res.suggestions);
+        }
+      } else {
+        setMsgs((m) => [
+          ...m,
+          {
+            role: 'assistant',
+            content: 'Received an empty response from market assistant service.',
+          },
+        ]);
+      }
+    } catch (err: any) {
       setMsgs((m) => [
         ...m,
         {
           role: 'assistant',
-          content: `Here is the multi-model ensemble analysis for **${sym}**:`,
-          stockCard: ai,
-          symbol: sym,
+          content: 'The assistant service is currently unavailable. Deterministic quantitative signals remain active on individual stock pages.',
         },
       ]);
-    } else {
-      setMsgs((m) => [
-        ...m,
-        {
-          role: 'assistant',
-          content: `Based on current market data, the NIFTY 50 index shows strong bullish momentum (+0.50% today). Institutional buying is concentrated in Financials and Auto. Ask me about **RELIANCE**, **TCS**, or **HDFCBANK** for specific stock evaluations!`,
-        },
-      ]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -135,12 +99,12 @@ export default function AssistantPage() {
             <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               AI Market Copilot
             </h2>
-            <p className="text-caption text-slate-500">4 Ensemble Models Connected</p>
+            <p className="text-caption text-slate-500">Deterministic Quant Engine (v1.0)</p>
           </div>
         </div>
 
         <Badge variant="indigo" size="sm">
-          GPT-4o + LightGBM Engine
+          Deterministic Signals v1.0
         </Badge>
       </div>
 
@@ -159,40 +123,6 @@ export default function AssistantPage() {
               }`}
             >
               <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
-
-              {/* Embedded Stock Card if symbol matched */}
-              {msg.stockCard && msg.symbol && (
-                <div className="mt-4 p-4 rounded-btn bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.06] space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-base font-semibold">{msg.symbol}</span>
-                      <p className="text-caption text-slate-500">
-                        ₹{msg.stockCard.price.toLocaleString()}
-                      </p>
-                    </div>
-                    <Badge variant={msg.stockCard.signal.toLowerCase() as any} size="md">
-                      {msg.stockCard.signal} ({msg.stockCard.confidence}%)
-                    </Badge>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <span className="text-caption text-slate-500 font-medium">Key Catalysts</span>
-                    {msg.stockCard.reasons.map((r: string, idx: number) => (
-                      <p key={idx} className="text-xs text-slate-600 dark:text-slate-300">
-                        • {r}
-                      </p>
-                    ))}
-                  </div>
-
-                  <div className="pt-2 flex justify-end">
-                    <Link href={`/stocks/${msg.symbol}`}>
-                      <Button variant="outline" size="sm">
-                        View Detailed Analysis →
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         ))}
@@ -201,7 +131,7 @@ export default function AssistantPage() {
           <div className="flex justify-start">
             <div className="bg-white dark:bg-[#121826] border border-slate-200 dark:border-white/[0.06] p-4 rounded-card-lg rounded-tl-none text-slate-400 text-xs flex items-center space-x-2">
               <span className="w-2 h-2 rounded-full bg-indigo-600 animate-ping" />
-              <span>Analyzing market telemetry & financial models...</span>
+              <span>Analyzing market data &amp; generating deterministic signal response...</span>
             </div>
           </div>
         )}
@@ -209,19 +139,17 @@ export default function AssistantPage() {
       </div>
 
       {/* Suggested Prompts */}
-      {msgs.length <= 2 && (
-        <div className="flex items-center space-x-2 py-3 overflow-x-auto scrollbar-none shrink-0">
-          {SUGGESTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => send(s)}
-              className="px-3 py-1.5 rounded-btn bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-xs font-medium text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-white/20 transition-all shrink-0"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="flex items-center space-x-2 py-3 overflow-x-auto scrollbar-none shrink-0">
+        {suggestions.map((s) => (
+          <button
+            key={s}
+            onClick={() => send(s)}
+            className="px-3 py-1.5 rounded-btn bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-xs font-medium text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-white/20 transition-all shrink-0"
+          >
+            {s}
+          </button>
+        ))}
+      </div>
 
       {/* Input Form */}
       <div className="pt-3 border-t border-slate-200 dark:border-white/[0.06] shrink-0">
@@ -233,7 +161,7 @@ export default function AssistantPage() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') send(input);
             }}
-            placeholder="Ask AI Copilot about any stock..."
+            placeholder="Ask AI Copilot about any NIFTY 50 stock..."
             className="w-full bg-white dark:bg-[#121826] border border-slate-200 dark:border-white/[0.08] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 rounded-input py-3 pl-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
           />
           <button
@@ -244,6 +172,9 @@ export default function AssistantPage() {
             <Send className="w-4 h-4" />
           </button>
         </div>
+        <p className="mt-1.5 text-[11px] text-slate-400 text-center">
+          Not investment advice • Indian equities (NSE) • Deterministic quant engine
+        </p>
       </div>
     </div>
   );
