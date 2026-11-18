@@ -32,6 +32,15 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
+    if (err?.code === 'P1001' || err?.message?.includes("Can't reach database server")) {
+      return NextResponse.json({
+        success: false,
+        status: 'unavailable',
+        error: 'Database server is unreachable. Please verify DATABASE_URL and ensure PostgreSQL is running.',
+        items: [],
+        as_of: new Date().toISOString(),
+      }, { status: 503 });
+    }
     console.error('[Watchlist GET Error]', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
@@ -85,6 +94,13 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
+    if (err?.code === 'P1001' || err?.message?.includes("Can't reach database server")) {
+      return NextResponse.json({
+        success: false,
+        status: 'unavailable',
+        error: 'Database server is unreachable. Please verify DATABASE_URL and ensure PostgreSQL is running.',
+      }, { status: 503 });
+    }
     console.error('[Watchlist POST Error]', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
@@ -122,6 +138,13 @@ export async function DELETE(req: Request) {
   } catch (err: any) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
+    }
+    if (err?.code === 'P1001' || err?.message?.includes("Can't reach database server")) {
+      return NextResponse.json({
+        success: false,
+        status: 'unavailable',
+        error: 'Database server is unreachable. Please verify DATABASE_URL and ensure PostgreSQL is running.',
+      }, { status: 503 });
     }
     console.error('[Watchlist DELETE Error]', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
