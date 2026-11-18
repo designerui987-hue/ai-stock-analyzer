@@ -4,8 +4,8 @@ import {
   isQuietHoursActive,
   isRateLimited,
   formatAlertText,
-} from './dispatch.ts';
-import type { AlertType, AlertPayload } from './dispatch.ts';
+} from './dispatch';
+import type { AlertType, AlertPayload } from './dispatch';
 
 console.log('Running Multi-Channel Alert Dispatcher Tests...');
 

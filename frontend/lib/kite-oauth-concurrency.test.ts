@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Kite OAuth Callback Concurrency & Replay Protection Tests
  *

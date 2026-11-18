@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Authentication and API Lockdown Tests
  *
@@ -252,7 +253,7 @@ async function runTests() {
       orderFilter = args.where;
       return [];
     }) as any;
-    function quoteRequest(headers: Record<string, string>) {
+    const quoteRequest = (headers: Record<string, string>) => {
       const timestamp = new Date().toISOString();
       return new Request('http://localhost/api/broker/orders/evaluate', {
         method: 'POST',
@@ -263,7 +264,7 @@ async function runTests() {
           user_id: 'another-account',
         }),
       });
-    }
+    };
     try {
       const bearer = { Authorization: `Bearer ${makeJWT('verified-account')}` };
       assert.strictEqual((await evaluatePaperOrders(quoteRequest(bearer))).status, 401);
@@ -272,7 +273,7 @@ async function runTests() {
       assert.strictEqual(orderFilter, undefined);
       const serviceResponse = await evaluatePaperOrders(quoteRequest({ ...bearer, 'x-cron-secret': TEST_CRON }));
       assert.strictEqual(serviceResponse.status, 200);
-      assert.strictEqual(orderFilter.user_id, 'verified-account');
+      assert.strictEqual((orderFilter as any)?.user_id, 'verified-account');
       assert.deepStrictEqual(await serviceResponse.json(), { success: true, evaluated: 0, filled: 0 });
       console.log('  ✓ Quote ingestion requires a service secret and scopes orders to the verified account');
     } finally {

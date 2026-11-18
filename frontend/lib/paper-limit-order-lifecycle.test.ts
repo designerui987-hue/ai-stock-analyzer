@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Paper Limit Order Lifecycle Tests
  *

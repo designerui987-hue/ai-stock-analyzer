@@ -5,8 +5,8 @@ import {
   extractNeuralNetFactors,
   extractProphetFactors,
   generateConsensusSummary,
-} from './extractFactors.ts';
-import type { ModelVote } from './factorMapping.ts';
+} from './extractFactors';
+import type { ModelVote } from './factorMapping';
 
 console.log('Running Explainability Factor Extraction Tests...');
 

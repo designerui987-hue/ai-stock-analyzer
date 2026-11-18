@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Quote Stream Recovery & Status Tests
  *

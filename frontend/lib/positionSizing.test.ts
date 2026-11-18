@@ -4,8 +4,8 @@ import {
   calculatePortfolioHeat,
   calculateSectorConcentration,
   checkSectorCorrelation,
-} from './positionSizing.ts';
-import type { HoldingPosition } from './positionSizing.ts';
+} from './positionSizing';
+import type { HoldingPosition } from './positionSizing';
 
 console.log('Running Position Sizing & Risk Calculation Tests...');
 

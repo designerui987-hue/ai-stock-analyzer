@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Audit Regression Tests (Frontend Indicators & Order Execution Safety)
  *

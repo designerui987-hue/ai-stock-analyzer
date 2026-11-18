@@ -6,8 +6,8 @@ import {
   getIVSkewSummary,
   calculateRollover,
   generateMockOptionChain,
-} from './optionChain.ts';
-import type { OptionChainEntry } from './optionChain.ts';
+} from './optionChain';
+import type { OptionChainEntry } from './optionChain';
 
 console.log('Running Option Chain Calculation Tests...');
 
