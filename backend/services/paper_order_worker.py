@@ -3,7 +3,7 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timezone, timedelta
 import logging
 from urllib.parse import urlsplit
 
@@ -43,7 +43,7 @@ def load_pending_orders() -> dict[str, PendingOrders]:
         rows = db.execute(text(
             'SELECT DISTINCT user_id, exchange, symbol FROM "OrderLog" '
             "WHERE mode = 'PAPER' AND broker = 'PAPER' AND status = 'OPEN' "
-            "AND order_type = 'LIMIT'"
+            "AND order_type IN ('LIMIT', 'SL', 'SL_M', 'MARKET')"
         )).all()
         by_user = defaultdict(set)
         for user_id, exchange, symbol in rows:
@@ -192,6 +192,26 @@ class PaperOrderWorker:
         while True:
             try:
                 user_id, payload, attempts = await self.retry_queue.get()
+
+                # Supported recovery freshness policy: Quotes older than 60 seconds are discarded
+                # to prevent filling resting orders with stale, delayed ticks after prolonged downtime.
+                exch_time_str = payload.get("exchange_timestamp")
+                if exch_time_str:
+                    try:
+                        parsed_time = datetime.fromisoformat(exch_time_str.replace("Z", "+00:00"))
+                        now_utc = datetime.now(timezone.utc)
+                        age_sec = (now_utc - parsed_time).total_seconds()
+                        if age_sec > 60:
+                            logger.info(
+                                "Recovery quote for %s expired (age %.1fs > 60s). Discarding stale quote.",
+                                payload.get("symbol"),
+                                age_sec,
+                            )
+                            self.retry_queue.task_done()
+                            continue
+                    except Exception:
+                        pass
+
                 token = create_access_token(user_id, timedelta(minutes=1))
                 try:
                     response = await client.post(

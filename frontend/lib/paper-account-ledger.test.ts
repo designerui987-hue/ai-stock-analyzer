@@ -49,6 +49,10 @@ class MockPrismaStore {
         if (query.where.id && o.id !== query.where.id) return false;
         if (query.where.user_id && o.user_id !== query.where.user_id) return false;
         if (query.where.idempotency_key && o.idempotency_key !== query.where.idempotency_key) return false;
+        if (query.where.source && o.source !== query.where.source) return false;
+        if (query.where.mode && o.mode !== query.where.mode) return false;
+        if (query.where.status && o.status !== query.where.status) return false;
+        if (query.where.response_raw?.contains && !o.response_raw?.includes(query.where.response_raw.contains)) return false;
         return true;
       }) || null;
     },

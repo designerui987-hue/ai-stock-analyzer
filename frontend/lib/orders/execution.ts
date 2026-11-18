@@ -2,6 +2,8 @@
  * Shared NSE Session Evaluator, Quote Freshness Gate & Realistic Paper Execution Engine.
  */
 
+import { withAccountLock } from './paper-account';
+
 export interface ServerQuotePayload {
   symbol?: string;
   exchange?: string;
@@ -556,8 +558,9 @@ export function checkPaperLimitSatisfaction(params: {
 }
 
 /**
- * Atomically transitions an OPEN paper limit order to FILLED in PostgreSQL.
- * Uses Prisma updateMany with `status: 'OPEN'` to guarantee idempotency and prevent duplicate fills.
+ * Atomically transitions an OPEN paper limit/SL order to FILLED in PostgreSQL.
+ * Serialized per-account with withAccountLock to guarantee single-fill execution,
+ * OCO sibling exit cancellation, bracket exit claiming, and atomic child exit spawning.
  */
 export async function executePaperLimitFill(
   prismaClient: any,
@@ -575,49 +578,148 @@ export async function executePaperLimitFill(
     nowUtc?: Date;
   }
 ): Promise<{ filled: boolean; count: number; reason: string }> {
-  const updateResult = await prismaClient.orderLog.updateMany({
-    where: {
-      id: params.orderId,
-      user_id: params.userId,
+  return await withAccountLock(prismaClient, params.userId, async (tx) => {
+    // 1. Fetch current order state
+    const order = typeof tx.orderLog?.findFirst === 'function'
+      ? await tx.orderLog.findFirst({
+          where: {
+            id: params.orderId,
+            user_id: params.userId,
+            mode: 'PAPER',
+          },
+        })
+      : (await tx.orderLog?.findMany({
+          where: {
+            id: params.orderId,
+            user_id: params.userId,
+            mode: 'PAPER',
+          },
+        }))?.[0];
+
+    if (!order || order.status !== 'OPEN') {
+      return {
+        filled: false,
+        count: 0,
+        reason: 'Order was already filled or cancelled concurrently (idempotency guard).',
+      };
+    }
+
+    let raw: any = {};
+    try {
+      raw = typeof order.response_raw === 'string' ? JSON.parse(order.response_raw) : order.response_raw || {};
+    } catch {}
+
+    // 2. Bracket Exit Atomic Claim: If attached exit (Target or SL), ensure sibling hasn't filled
+    const isAttachedExit = order.source === 'ATTACHED_TARGET' || order.source === 'ATTACHED_STOP_LOSS';
+    const parentOrderId = raw?.parent_order_id;
+
+    if (isAttachedExit && parentOrderId) {
+      const siblingSource = order.source === 'ATTACHED_TARGET' ? 'ATTACHED_STOP_LOSS' : 'ATTACHED_TARGET';
+      const sibling = typeof tx.orderLog?.findFirst === 'function'
+        ? await tx.orderLog.findFirst({
+            where: {
+              user_id: params.userId,
+              mode: 'PAPER',
+              source: siblingSource,
+              response_raw: { contains: parentOrderId },
+            },
+          })
+        : (await tx.orderLog?.findMany({
+            where: {
+              user_id: params.userId,
+              mode: 'PAPER',
+              source: siblingSource,
+            },
+          }))?.find((o: any) => o.response_raw?.includes(parentOrderId));
+
+      if (sibling && (sibling.status === 'FILLED' || sibling.status === 'COMPLETE')) {
+        // Sibling already won and filled! Cancel this exit atomically and do not fill.
+        await tx.orderLog.updateMany({
+          where: { id: order.id, status: 'OPEN' },
+          data: { status: 'CANCELLED' },
+        });
+        return {
+          filled: false,
+          count: 0,
+          reason: `Bracket sibling (${siblingSource}) was already filled; this exit is cancelled (OCO).`,
+        };
+      }
+
+      // Sibling is OPEN: atomically cancel sibling in the same transaction
+      if (sibling && sibling.status === 'OPEN') {
+        await tx.orderLog.updateMany({
+          where: { id: sibling.id, status: 'OPEN' },
+          data: { status: 'CANCELLED' },
+        });
+      }
+    }
+
+    // 3. Atomically transition this order to FILLED with true execution timestamp
+    const fillTime = (params.nowUtc || new Date()).toISOString();
+    const updatedRaw = {
+      ...raw,
       mode: 'PAPER',
-      broker: 'PAPER',
-      order_type: params.orderType ?? 'LIMIT',
-      status: 'OPEN',
-    },
-    data: {
-      status: 'FILLED',
-      price: params.fillPrice,
+      market_session: params.sessionName || 'REGULAR',
+      quote_source: params.quoteSource || 'live_feed',
+      quote_as_of: params.quoteAsOf || null,
+      fill_price: params.fillPrice,
       slippage_bps: params.slippageBps ?? 5,
       fees_inr: params.fees,
-      quote_as_of: params.quoteAsOf || null,
-      response_raw: JSON.stringify({
+      fee_breakdown: params.feeBreakdown || null,
+      executed_at: fillTime,
+      filled_at: fillTime,
+      reason: `Paper order filled at ₹${params.fillPrice} on execution criteria satisfaction.`,
+    };
+
+    const updateResult = await tx.orderLog.updateMany({
+      where: {
+        id: params.orderId,
+        user_id: params.userId,
         mode: 'PAPER',
-        market_session: params.sessionName || 'REGULAR',
-        quote_source: params.quoteSource || 'live_feed',
-        quote_as_of: params.quoteAsOf || null,
-        fill_price: params.fillPrice,
+        broker: 'PAPER',
+        order_type: params.orderType ?? order.order_type ?? 'LIMIT',
+        status: 'OPEN',
+      },
+      data: {
+        status: 'FILLED',
+        price: params.fillPrice,
         slippage_bps: params.slippageBps ?? 5,
         fees_inr: params.fees,
-        fee_breakdown: params.feeBreakdown || null,
-        filled_at: (params.nowUtc || new Date()).toISOString(),
-        reason: `Paper order filled at ₹${params.fillPrice} on execution criteria satisfaction.`,
-      }),
-    },
-  });
+        quote_as_of: params.quoteAsOf || null,
+        response_raw: JSON.stringify(updatedRaw),
+      },
+    });
 
-  if (updateResult.count === 0) {
+    if (updateResult.count === 0) {
+      return {
+        filled: false,
+        count: 0,
+        reason: 'Order was already filled or cancelled concurrently (idempotency guard).',
+      };
+    }
+
+    // 4. If parent order had attached exits specified, spawn them within the SAME transaction
+    if (raw.attached_target_price || raw.attached_stop_loss_price) {
+      await spawnAttachedExitOrders(tx, {
+        userId: params.userId,
+        parentOrder: {
+          id: order.id,
+          symbol: order.symbol,
+          exchange: order.exchange,
+          quantity: order.quantity,
+          product_type: order.product_type,
+        },
+        targetPrice: raw.attached_target_price,
+        stopLossPrice: raw.attached_stop_loss_price,
+      });
+    }
+
     return {
-      filled: false,
-      count: 0,
-      reason: 'Order was already filled or cancelled concurrently (idempotency guard).',
+      filled: true,
+      count: 1,
+      reason: `Order ${params.orderId} filled at ₹${params.fillPrice}.`,
     };
-  }
-
-  return {
-    filled: true,
-    count: 1,
-    reason: `Order ${params.orderId} filled at ₹${params.fillPrice}.`,
-  };
+  });
 }
 
 export async function spawnAttachedExitOrders(
@@ -765,45 +867,6 @@ export async function evaluateRestingPaperOrdersWithQuote(
       if (fillRes.filled) {
         filledCount++;
         results.push({ orderId: order.id, status: 'FILLED', reason: satisfaction.reason });
-
-        // Handle attached exits or OCO sibling cancellations
-        try {
-          const raw = JSON.parse(order.response_raw || '{}');
-
-          // If filled order was an attached exit (Target or SL), cancel OCO sibling
-          if (raw.parent_order_id && (order.source === 'ATTACHED_TARGET' || order.source === 'ATTACHED_STOP_LOSS')) {
-            await prismaClient.orderLog.updateMany({
-              where: {
-                user_id: userId,
-                mode: 'PAPER',
-                status: 'OPEN',
-                source: order.source === 'ATTACHED_TARGET' ? 'ATTACHED_STOP_LOSS' : 'ATTACHED_TARGET',
-                response_raw: { contains: raw.parent_order_id },
-              },
-              data: {
-                status: 'CANCELLED',
-              },
-            });
-          }
-
-          // If filled order had attached target or stop loss, spawn child exits
-          if (raw.attached_target_price || raw.attached_stop_loss_price) {
-            await spawnAttachedExitOrders(prismaClient, {
-              userId,
-              parentOrder: {
-                id: order.id,
-                symbol: order.symbol,
-                exchange: order.exchange,
-                quantity: order.quantity,
-                product_type: order.product_type,
-              },
-              targetPrice: raw.attached_target_price,
-              stopLossPrice: raw.attached_stop_loss_price,
-            });
-          }
-        } catch (e) {
-          console.warn('[Attached exits handling error]', e);
-        }
       } else {
         results.push({ orderId: order.id, status: 'OPEN', reason: fillRes.reason });
       }

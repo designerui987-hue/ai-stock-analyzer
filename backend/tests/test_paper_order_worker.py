@@ -73,3 +73,82 @@ def test_resting_order_watch_uses_account_feed_and_keeps_watchlist(monkeypatch):
         await collector.release_subscription("account-a", "watchlist")
 
     asyncio.run(exercise())
+
+
+def test_load_pending_orders_includes_stop_loss_only_accounts(monkeypatch):
+    """Test that stop-loss-only accounts (SL / SL_M) are discovered by load_pending_orders."""
+    class FakeResult:
+        def all(self):
+            return [
+                ("user-sl-only", "NSE", "RELIANCE"),
+                ("user-limit-and-sl", "NSE", "INFY"),
+            ]
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, statement):
+            stmt_text = str(statement)
+            assert "order_type IN ('LIMIT', 'SL', 'SL_M', 'MARKET')" in stmt_text
+            return FakeResult()
+
+    monkeypatch.setattr(paper_order_worker, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(
+        paper_order_worker,
+        "resolve_user_kite_credentials",
+        lambda uid, db: UserKiteCredentials(uid, "k", "t", None, "CONNECTED"),
+    )
+
+    pending = paper_order_worker.load_pending_orders()
+    assert "user-sl-only" in pending
+    assert ("NSE", "RELIANCE") in pending["user-sl-only"].instruments
+    assert "user-limit-and-sl" in pending
+    assert ("NSE", "INFY") in pending["user-limit-and-sl"].instruments
+
+
+def test_recovery_policy_discards_expired_quotes_older_than_60s():
+    """Verify that delayed replay quotes older than 60s are dropped during recovery."""
+    async def exercise():
+        forwarded = []
+
+        def receive_quote(request):
+            forwarded.append(json.loads(request.content))
+            return httpx.Response(200)
+
+        worker = paper_order_worker.PaperOrderWorker("http://localhost/api/broker/orders/evaluate", "service-secret")
+
+        # Put an expired quote (> 60s old) into the retry queue
+        expired_payload = {
+            "symbol": "TCS",
+            "exchange": "NSE",
+            "price": 3500.0,
+            "exchange_timestamp": "2026-11-18T04:00:00+00:00",  # over 1 hour old
+            "last_trade_timestamp": "2026-11-18T04:00:00+00:00",
+        }
+        worker.retry_queue.put_nowait(("user-1", expired_payload, 0))
+
+        # Put a fresh quote into the retry queue
+        fresh_payload = {
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "price": 1850.0,
+            "exchange_timestamp": paper_order_worker.datetime.now(paper_order_worker.timezone.utc).isoformat(),
+            "last_trade_timestamp": paper_order_worker.datetime.now(paper_order_worker.timezone.utc).isoformat(),
+        }
+        worker.retry_queue.put_nowait(("user-1", fresh_payload, 0))
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(receive_quote)) as client:
+            drain_task = asyncio.create_task(worker.drain_retries(client))
+            await worker.retry_queue.join()
+            drain_task.cancel()
+            await asyncio.gather(drain_task, return_exceptions=True)
+
+        assert len(forwarded) == 1
+        assert forwarded[0]["symbol"] == "INFY"
+
+    asyncio.run(exercise())
+

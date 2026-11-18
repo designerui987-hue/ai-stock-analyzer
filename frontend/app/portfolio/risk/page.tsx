@@ -25,7 +25,51 @@ import {
 
 export default function PortfolioRiskDashboard() {
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
-  if (!isDemoMode) {
+  const [realHoldings, setRealHoldings] = React.useState<HoldingPosition[] | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let mounted = true;
+    import('@/lib/api').then(({ api }) => {
+      api.getPortfolio()
+        .then((port) => {
+          if (!mounted) return;
+          if (port && Array.isArray(port.holdings) && port.holdings.length > 0) {
+            const mapped: HoldingPosition[] = port.holdings.map((h: any) => ({
+              symbol: h.symbol,
+              name: h.name || h.symbol,
+              qty: Number(h.qty || h.quantity),
+              avg_price: Number(h.avg_price),
+              current_price: typeof h.current_price === 'number' && h.current_price > 0 ? h.current_price : Number(h.avg_price),
+              stop_loss: parseFloat((Number(h.avg_price) * 0.94).toFixed(2)),
+              sector: h.sector || 'NSE Equity',
+            }));
+            setRealHoldings(mapped);
+          } else {
+            setRealHoldings([]);
+          }
+        })
+        .catch(() => {
+          if (mounted) setRealHoldings([]);
+        })
+        .finally(() => {
+          if (mounted) setLoading(false);
+        });
+    });
+    return () => { mounted = false; };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 py-12 animate-fade-in text-center">
+        <p className="text-sm text-slate-500">Loading portfolio risk telemetry...</p>
+      </div>
+    );
+  }
+
+  const hasRealHoldings = realHoldings && realHoldings.length > 0;
+
+  if (!hasRealHoldings && !isDemoMode) {
     return (
       <div className="max-w-4xl mx-auto space-y-6 py-8 animate-fade-in">
         <div>
@@ -39,7 +83,7 @@ export default function PortfolioRiskDashboard() {
         <Card className="p-8 space-y-4 border-slate-200 dark:border-white/[0.08]">
           <div className="flex items-center space-x-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm">
             <Info className="w-5 h-5" />
-            <span>Live Portfolio Telemetry Awaiting Active Account</span>
+            <span>No Active Holdings in Portfolio</span>
           </div>
           <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
             In accordance with our strict data integrity policy, synthetic portfolio risk calculations are never shown with placeholder fixtures. To view live portfolio heat and open risk calculations, add positions to your database Portfolio or connect your Zerodha Kite broker account.
@@ -64,15 +108,17 @@ export default function PortfolioRiskDashboard() {
   const p = DEMO_PORTFOLIO;
   const capital = 1183500; // Account Capital
 
-  const holdings: HoldingPosition[] = p.holdings.map((h) => ({
-    symbol: h.symbol,
-    name: h.name,
-    qty: h.qty,
-    avg_price: h.avg_price,
-    current_price: h.current_price,
-    stop_loss: parseFloat((h.avg_price * 0.94).toFixed(2)), // 6% trailing SL
-    sector: h.sector,
-  }));
+  const holdings: HoldingPosition[] = hasRealHoldings
+    ? realHoldings!
+    : p.holdings.map((h) => ({
+        symbol: h.symbol,
+        name: h.name,
+        qty: h.qty,
+        avg_price: h.avg_price,
+        current_price: h.current_price,
+        stop_loss: parseFloat((h.avg_price * 0.94).toFixed(2)), // 6% trailing SL
+        sector: h.sector,
+      }));
 
   const heat = calculatePortfolioHeat(holdings, capital);
   const sectorConc = calculateSectorConcentration(holdings, capital);

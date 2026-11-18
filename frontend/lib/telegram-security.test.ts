@@ -56,8 +56,22 @@ async function runTelegramSecurityTests() {
   const origPrefUpsert = prisma.alertPreference.upsert;
   const origPrefCreate = prisma.alertPreference.create;
   const origPrefDeleteMany = prisma.alertPreference.deleteMany;
+  const origTransaction = prisma.$transaction;
 
   if (!isDbOnline) {
+    prisma.$transaction = (async (cb: any) => {
+      const stateSnapshot = new Map(Array.from(memoryStates.entries()).map(([k, v]) => [k, { ...v }]));
+      const prefSnapshot = new Map(Array.from(memoryPrefs.entries()).map(([k, v]) => [k, { ...v }]));
+      try {
+        return await cb(prisma);
+      } catch (e) {
+        memoryStates.clear();
+        stateSnapshot.forEach((v, k) => memoryStates.set(k, v));
+        memoryPrefs.clear();
+        prefSnapshot.forEach((v, k) => memoryPrefs.set(k, v));
+        throw e;
+      }
+    }) as any;
     prisma.oAuthState.deleteMany = (async () => ({ count: 0 })) as any;
     prisma.oAuthState.create = (async (args: any) => {
       const row = { id: 'st_' + Date.now() + Math.random(), ...args.data };
@@ -254,9 +268,77 @@ async function runTelegramSecurityTests() {
       console.log('  ✓ Expired token is rejected');
     }
 
+    // Test 8: Webhook fails closed (503) when TELEGRAM_WEBHOOK_SECRET is unconfigured
+    {
+      const oldSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+      delete process.env.TELEGRAM_WEBHOOK_SECRET;
+      const req = new Request('http://localhost/api/telegram/webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-telegram-bot-api-secret-token': 'any-secret',
+        },
+        body: JSON.stringify({ message: { chat: { id: 123 }, text: '/start tg_test' } }),
+      });
+      const res = await handleWebhook(req);
+      assert.strictEqual(res.status, 503, 'Missing secret must fail closed with 503');
+      process.env.TELEGRAM_WEBHOOK_SECRET = oldSecret;
+      console.log('  ✓ Missing TELEGRAM_WEBHOOK_SECRET fails closed with 503');
+    }
+
+    // Test 9: Transaction failure preserves token without marking it used
+    {
+      const tokenNonce = 'tg_tx_failure_preserve_test_token_123';
+      await prisma.oAuthState.create({
+        data: {
+          user_id: TEST_USER,
+          nonce: tokenNonce,
+          expires_at: new Date(Date.now() + 600000),
+          used: false,
+        },
+      });
+
+      // Temporarily simulate failure during preference write inside transaction
+      const oldTx = prisma.$transaction;
+      prisma.$transaction = (async (cb: any) => {
+        return await oldTx(async (tx: any) => {
+          const failingTx = {
+            ...tx,
+            alertPreference: {
+              ...tx.alertPreference,
+              upsert: async () => {
+                throw new Error('SIMULATED_DB_WRITE_FAILURE');
+              },
+            },
+          };
+          return await cb(failingTx);
+        });
+      }) as any;
+
+      const req = new Request('http://localhost/api/telegram/webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-telegram-bot-api-secret-token': TEST_SECRET,
+        },
+        body: JSON.stringify({ message: { chat: { id: 777777 }, text: `/start ${tokenNonce}` } }),
+      });
+
+      const res = await handleWebhook(req);
+      assert.strictEqual(res.status, 500, 'Transaction failure must return 500');
+
+      prisma.$transaction = oldTx;
+
+      // Verify token remains UNUSED so user can retry
+      const preserved = await prisma.oAuthState.findFirst({ where: { nonce: tokenNonce } });
+      assert.strictEqual(preserved?.used, false, 'Failed transaction must preserve token (used=false)');
+      console.log('  ✓ Transaction failure rolls back and preserves token for retry');
+    }
+
     console.log('All Telegram Security & Webhook Tests Passed Successfully!\n');
   } finally {
     if (!isDbOnline) {
+      prisma.$transaction = origTransaction;
       prisma.oAuthState.create = origStateCreate;
       prisma.oAuthState.findFirst = origStateFindFirst;
       prisma.oAuthState.updateMany = origStateUpdateMany;

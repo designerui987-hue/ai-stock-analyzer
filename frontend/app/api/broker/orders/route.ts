@@ -16,8 +16,63 @@ import {
   calculateIndianEquityFees,
   ServerQuotePayload,
 } from '@/lib/orders/execution';
-import { getPaperAccountState } from '@/lib/orders/paper-account';
+import { getPaperAccountState, withAccountLock, computePaperAccountState } from '@/lib/orders/paper-account';
 import { z } from 'zod';
+
+function matchesExistingOrder(existing: any, expected: {
+  symbol: string;
+  exchange: string;
+  transaction_type: string;
+  quantity: number;
+  order_type: string;
+  product_type?: string;
+  mode: string;
+  limit_price?: number;
+  trigger_price?: number;
+  target_price?: number;
+  stop_loss_price?: number;
+}): boolean {
+  if (existing.symbol?.toUpperCase() !== expected.symbol.toUpperCase()) return false;
+  if ((existing.exchange || 'NSE').toUpperCase() !== expected.exchange.toUpperCase()) return false;
+  if (existing.transaction_type?.toUpperCase() !== expected.transaction_type.toUpperCase()) return false;
+  if (Number(existing.quantity) !== Number(expected.quantity)) return false;
+  if (existing.order_type?.toUpperCase() !== expected.order_type.toUpperCase()) return false;
+  if ((existing.product_type || 'CNC').toUpperCase() !== (expected.product_type || 'CNC').toUpperCase()) return false;
+  if ((existing.mode || 'PAPER').toUpperCase() !== expected.mode.toUpperCase()) return false;
+
+  let raw: any = {};
+  try {
+    raw = typeof existing.response_raw === 'string' ? JSON.parse(existing.response_raw) : existing.response_raw || {};
+  } catch {}
+
+  if (expected.limit_price != null) {
+    const existingLimit = raw.limit_price ?? existing.price;
+    if (existingLimit == null || Math.abs(Number(existingLimit) - Number(expected.limit_price)) > 0.01) {
+      return false;
+    }
+  }
+
+  if (expected.trigger_price != null) {
+    const existingTrigger = raw.trigger_price ?? existing.trigger_price;
+    if (existingTrigger == null || Math.abs(Number(existingTrigger) - Number(expected.trigger_price)) > 0.01) {
+      return false;
+    }
+  }
+
+  if (expected.target_price != null) {
+    if (raw.attached_target_price == null || Math.abs(Number(raw.attached_target_price) - Number(expected.target_price)) > 0.01) {
+      return false;
+    }
+  }
+
+  if (expected.stop_loss_price != null) {
+    if (raw.attached_stop_loss_price == null || Math.abs(Number(raw.attached_stop_loss_price) - Number(expected.stop_loss_price)) > 0.01) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 const OrderPostSchema = z.object({
   symbol: z.string().min(1).max(20).regex(/^[A-Za-z0-9_.-]+$/),
@@ -169,6 +224,27 @@ export async function POST(req: Request) {
         where: { user_id: userId, idempotency_key: idempotencyKey },
       });
       if (existing) {
+        const matches = matchesExistingOrder(existing, {
+          symbol: sym,
+          exchange: exch,
+          transaction_type,
+          quantity,
+          order_type,
+          product_type,
+          mode,
+          limit_price,
+          trigger_price,
+          target_price,
+          stop_loss_price,
+        });
+
+        if (!matches) {
+          return NextResponse.json(
+            { success: false, error: 'Idempotency key was reused with conflicting order parameters.' },
+            { status: 409 }
+          );
+        }
+
         return NextResponse.json({
           success: existing.status !== 'REJECTED',
           deduplicated: true,
@@ -266,176 +342,193 @@ export async function POST(req: Request) {
       }
     }
 
-    // 6. Paper Trading Simulation Path (strictly isolated ledger)
+    // 6. Paper Trading Simulation Path (strictly isolated ledger with concurrency-safe locking)
     if (mode === 'PAPER') {
-      // 6a. Virtual Account Buying Power and Holding Inventory Checks
-      const paperAccount = await getPaperAccountState(prisma, userId);
-      const evalPrice = limit_price ?? currentPrice;
-      const notional = evalPrice * quantity;
-      const estFees = calculateIndianEquityFees(notional, transaction_type, product_type || 'CNC').total_fees;
-
-      if (transaction_type === 'BUY') {
-        const requiredCash = notional + estFees;
-        if (requiredCash > paperAccount.available_cash) {
-          return NextResponse.json(
-            {
-              success: false,
-              mode: 'PAPER',
-              error: `Insufficient virtual cash balance. Required: ₹${requiredCash.toFixed(2)}, Available: ₹${paperAccount.available_cash.toFixed(2)}.`,
-            },
-            { status: 422 }
-          );
-        }
-      } else if (transaction_type === 'SELL' && (product_type === 'CNC' || !product_type)) {
-        // Enforce delivery holdings to prevent unsupported delivery short selling
-        const ownedHolding = paperAccount.positions[sym];
-        const availableQty = ownedHolding?.available_quantity || 0;
-        if (quantity > availableQty) {
-          return NextResponse.json(
-            {
-              success: false,
-              mode: 'PAPER',
-              error: `Insufficient delivery holdings to sell. Owned: ${ownedHolding?.quantity || 0}, Reserved: ${ownedHolding?.reserved_quantity || 0}, Available: ${availableQty}, Attempted: ${quantity}. Delivery short selling is not permitted.`,
-            },
-            { status: 422 }
-          );
-        }
-      }
-
-      const sim = simulatePaperExecution({
-        transaction_type,
-        order_type,
-        product_type,
-        quantity,
-        quotePrice: currentPrice,
-        limitPrice: limit_price,
-        triggerPrice: trigger_price,
-        marketOpen: sessionInfo.open,
-        marketSession: sessionInfo.session,
-      });
-
-      if (sim.status === 'REJECTED') {
-        const rejectedLog = await prisma.orderLog.create({
-          data: {
-            user_id: userId,
-            broker: 'PAPER',
-            mode: 'PAPER',
-            exchange: exch,
-            symbol: sym,
-            transaction_type,
-            quantity,
-            order_type,
-            price: limit_price ?? currentPrice,
-            trigger_price: trigger_price ?? null,
-            product_type,
-            source: signal_id || 'PAPER_SIMULATION',
-            broker_order_id: `PAPER_${Date.now()}`,
-            idempotency_key: idempotencyKey,
-            quote_as_of: quoteCheck.asOf || null,
-            slippage_bps: 0,
-            fees_inr: 0,
-            status: 'REJECTED',
-            response_raw: JSON.stringify({
-              mode: 'PAPER',
-              market_session: sessionInfo.session,
-              quote_source: quoteCheck.source,
-              quote_as_of: quoteCheck.asOf,
-              reason: sim.reason,
-            }),
-          },
+      return await withAccountLock(prisma, userId, async (tx) => {
+        // 6a. Re-read all paper orders for this account inside the locked transaction
+        const currentOrders = await tx.orderLog.findMany({
+          where: { user_id: userId, mode: 'PAPER' },
+          orderBy: { placed_at: 'asc' },
         });
-        return NextResponse.json(
-          { success: false, mode: 'PAPER', error: sim.reason, order: rejectedLog },
-          { status: 422 }
-        );
-      }
+        const paperAccount = computePaperAccountState(currentOrders);
 
-      let paperOrder: any;
-      try {
-        paperOrder = await prisma.orderLog.create({
-          data: {
-            user_id: userId,
-            broker: 'PAPER',
-            mode: 'PAPER',
-            exchange: exch,
-            symbol: sym,
-            transaction_type,
-            quantity,
-            order_type,
-            price: sim.execution_price ?? limit_price ?? currentPrice,
-            trigger_price: trigger_price ?? null,
-            product_type,
-            source: signal_id || 'PAPER_SIMULATION',
-            broker_order_id: `PAPER_${Date.now()}`,
-            idempotency_key: idempotencyKey,
-            quote_as_of: quoteCheck.asOf || null,
-            slippage_bps: sim.slippage_bps,
-            fees_inr: sim.fees_inr,
-            status: sim.status,
-            response_raw: JSON.stringify({
-              mode: 'PAPER',
-              market_session: sessionInfo.session,
-              quote_source: quoteCheck.source,
-              quote_as_of: quoteCheck.asOf,
-              fill_price: sim.execution_price,
-              slippage_bps: sim.slippage_bps,
-              fees_inr: sim.fees_inr,
-              fee_breakdown: sim.fee_breakdown || null,
-              attached_target_price: target_price || null,
-              attached_stop_loss_price: stop_loss_price || null,
-              reason: sim.reason,
-            }),
-          },
-        });
-      } catch (err: any) {
-        if (err?.code === 'P2002' && idempotencyKey) {
-          const existing = await prisma.orderLog.findFirst({
-            where: { user_id: userId, idempotency_key: idempotencyKey },
-          });
-          if (existing) {
-            const matches = (
-              existing.symbol === sym &&
-              existing.transaction_type === transaction_type &&
-              existing.quantity === quantity &&
-              existing.order_type === order_type
+        const evalPrice = limit_price ?? currentPrice;
+        const notional = evalPrice * quantity;
+        const estFees = calculateIndianEquityFees(notional, transaction_type, product_type || 'CNC').total_fees;
+        const maxSlippageCost = (notional * (max_slippage_pct || 1.0)) / 100;
+
+        if (transaction_type === 'BUY') {
+          // Affordability check includes notional, fees, and execution slippage
+          const requiredCash = notional + estFees + maxSlippageCost;
+          if (requiredCash > paperAccount.available_cash) {
+            return NextResponse.json(
+              {
+                success: false,
+                mode: 'PAPER',
+                error: `Insufficient virtual cash balance. Required: ₹${requiredCash.toFixed(2)}, Available: ₹${paperAccount.available_cash.toFixed(2)}.`,
+              },
+              { status: 422 }
             );
-            if (!matches) {
-              return NextResponse.json(
-                { success: false, error: 'Idempotency key was reused with conflicting order parameters.' },
-                { status: 409 }
-              );
-            }
-            return NextResponse.json({
-              success: existing.status !== 'REJECTED',
-              deduplicated: true,
-              mode: existing.mode || mode,
-              message: 'Duplicate submission deduplicated via Idempotency-Key.',
-              order: existing,
-            });
+          }
+        } else if (transaction_type === 'SELL' && (product_type === 'CNC' || !product_type)) {
+          // Enforce delivery holdings to prevent unsupported delivery short selling
+          const ownedHolding = paperAccount.positions[sym];
+          const availableQty = ownedHolding?.available_quantity || 0;
+          if (quantity > availableQty) {
+            return NextResponse.json(
+              {
+                success: false,
+                mode: 'PAPER',
+                error: `Insufficient delivery holdings to sell. Owned: ${ownedHolding?.quantity || 0}, Reserved: ${ownedHolding?.reserved_quantity || 0}, Available: ${availableQty}, Attempted: ${quantity}. Delivery short selling is not permitted.`,
+              },
+              { status: 422 }
+            );
           }
         }
-        throw err;
-      }
 
-      // If paper order filled immediately and has attached exits, spawn resting child orders
-      if (paperOrder.status === 'FILLED' && (target_price || stop_loss_price)) {
+        const sim = simulatePaperExecution({
+          transaction_type,
+          order_type,
+          product_type,
+          quantity,
+          quotePrice: currentPrice,
+          limitPrice: limit_price,
+          triggerPrice: trigger_price,
+          marketOpen: sessionInfo.open,
+          marketSession: sessionInfo.session,
+        });
+
+        if (sim.status === 'REJECTED') {
+          const rejectedLog = await tx.orderLog.create({
+            data: {
+              user_id: userId,
+              broker: 'PAPER',
+              mode: 'PAPER',
+              exchange: exch,
+              symbol: sym,
+              transaction_type,
+              quantity,
+              order_type,
+              price: limit_price ?? currentPrice,
+              trigger_price: trigger_price ?? null,
+              product_type,
+              source: signal_id || 'PAPER_SIMULATION',
+              broker_order_id: `PAPER_${Date.now()}`,
+              idempotency_key: idempotencyKey,
+              quote_as_of: quoteCheck.asOf || null,
+              slippage_bps: 0,
+              fees_inr: 0,
+              status: 'REJECTED',
+              response_raw: JSON.stringify({
+                mode: 'PAPER',
+                market_session: sessionInfo.session,
+                quote_source: quoteCheck.source,
+                quote_as_of: quoteCheck.asOf,
+                reason: sim.reason,
+              }),
+            },
+          });
+          return NextResponse.json(
+            { success: false, mode: 'PAPER', error: sim.reason, order: rejectedLog },
+            { status: 422 }
+          );
+        }
+
+        const fillTime = sim.status === 'FILLED' ? new Date().toISOString() : null;
+        let paperOrder: any;
         try {
-          await spawnAttachedExitOrders(prisma, {
+          paperOrder = await tx.orderLog.create({
+            data: {
+              user_id: userId,
+              broker: 'PAPER',
+              mode: 'PAPER',
+              exchange: exch,
+              symbol: sym,
+              transaction_type,
+              quantity,
+              order_type,
+              price: sim.execution_price ?? limit_price ?? currentPrice,
+              trigger_price: trigger_price ?? null,
+              product_type,
+              source: signal_id || 'PAPER_SIMULATION',
+              broker_order_id: `PAPER_${Date.now()}`,
+              idempotency_key: idempotencyKey,
+              quote_as_of: quoteCheck.asOf || null,
+              slippage_bps: sim.slippage_bps,
+              fees_inr: sim.fees_inr,
+              status: sim.status,
+              response_raw: JSON.stringify({
+                mode: 'PAPER',
+                market_session: sessionInfo.session,
+                quote_source: quoteCheck.source,
+                quote_as_of: quoteCheck.asOf,
+                limit_price: limit_price || null,
+                trigger_price: trigger_price || null,
+                fill_price: sim.execution_price,
+                slippage_bps: sim.slippage_bps,
+                fees_inr: sim.fees_inr,
+                fee_breakdown: sim.fee_breakdown || null,
+                attached_target_price: target_price || null,
+                attached_stop_loss_price: stop_loss_price || null,
+                executed_at: fillTime,
+                filled_at: fillTime,
+                reason: sim.reason,
+              }),
+            },
+          });
+        } catch (err: any) {
+          if (err?.code === 'P2002' && idempotencyKey) {
+            const existing = await tx.orderLog.findFirst({
+              where: { user_id: userId, idempotency_key: idempotencyKey },
+            });
+            if (existing) {
+              const matches = matchesExistingOrder(existing, {
+                symbol: sym,
+                exchange: exch,
+                transaction_type,
+                quantity,
+                order_type,
+                product_type,
+                mode,
+                limit_price,
+                trigger_price,
+                target_price,
+                stop_loss_price,
+              });
+              if (!matches) {
+                return NextResponse.json(
+                  { success: false, error: 'Idempotency key was reused with conflicting order parameters.' },
+                  { status: 409 }
+                );
+              }
+              return NextResponse.json({
+                success: existing.status !== 'REJECTED',
+                deduplicated: true,
+                mode: existing.mode || mode,
+                message: 'Duplicate submission deduplicated via Idempotency-Key.',
+                order: existing,
+              });
+            }
+          }
+          throw err;
+        }
+
+        // If paper order filled immediately and has attached exits, spawn resting child orders inside tx
+        if (paperOrder.status === 'FILLED' && (target_price || stop_loss_price)) {
+          await spawnAttachedExitOrders(tx, {
             userId,
             parentOrder: paperOrder,
             targetPrice: target_price,
             stopLossPrice: stop_loss_price,
           });
-        } catch (e) {
-          console.warn('[Attached exit spawn error]', e);
         }
-      }
 
-      return NextResponse.json({
-        success: true,
-        mode: 'PAPER',
-        message: sim.reason,
-        order: paperOrder,
+        return NextResponse.json({
+          success: true,
+          mode: 'PAPER',
+          message: sim.reason,
+          order: paperOrder,
+        });
       });
     }
 

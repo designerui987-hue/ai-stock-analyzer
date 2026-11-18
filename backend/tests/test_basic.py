@@ -115,6 +115,34 @@ def test_empty_user_alerts_return_empty_list_not_500(db: Session):
     db.commit()
 
 
+def test_existing_database_migration_removes_unique_display_name_constraint():
+    """Verify that populated databases with legacy unique display name indexes upgrade safely without data loss."""
+    from sqlalchemy import create_engine, text
+    from db.session import apply_migrations, init_db
+    from db.models import Base
+
+    test_engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=test_engine)
+
+    with test_engine.connect() as conn:
+        # Simulate legacy populated database with UNIQUE index on username
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username);"))
+        conn.execute(text("INSERT INTO users (email, username, password_hash) VALUES ('existing@ex.com', 'SameName', 'h1');"))
+        conn.commit()
+
+    # Apply migration
+    apply_migrations(test_engine)
+
+    # Verify existing record preserved and second record with duplicate display name allowed
+    with test_engine.connect() as conn:
+        conn.execute(text("INSERT INTO users (email, username, password_hash) VALUES ('new@ex.com', 'SameName', 'h2');"))
+        conn.commit()
+        rows = conn.execute(text("SELECT email, username FROM users WHERE username = 'SameName';")).all()
+        assert len(rows) == 2
+        emails = {r[0] for r in rows}
+        assert emails == {"existing@ex.com", "new@ex.com"}
+
+
 if __name__ == "__main__":
     # Run basic tests
     from db.session import SessionLocal

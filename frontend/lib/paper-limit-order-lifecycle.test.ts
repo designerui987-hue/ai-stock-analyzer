@@ -216,6 +216,11 @@ async function runPaperLimitLifecycleTests() {
       });
     }
 
+    async findFirst(query?: any) {
+      const all = await this.findMany(query);
+      return all[0] || null;
+    }
+
     async updateMany(query: { where: Record<string, any>; data: any }) {
       const order = this.orders.get(query.where.id);
       if (!order || !Object.entries(query.where).every(([key, value]) => {

@@ -22,7 +22,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { formatNumber } from '@/lib/data';
-import { api } from '@/lib/api';
+import { api, auth } from '@/lib/api';
 import { useAuth } from '@/store/useAuth';
 
 interface BackendHolding {
@@ -90,31 +90,63 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
   const fetchPortfolioData = useCallback(async () => {
     try {
       setLoading(true);
-      const [portRes, paperRes] = await Promise.all([
+      const [portRes, paperOrdersRes, paperAccountRes] = await Promise.all([
         api.getPortfolio().catch(() => null),
-        fetch('/api/broker/orders?mode=PAPER')
+        fetch('/api/broker/orders?mode=PAPER', { headers: auth.getAuthHeaders() })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        fetch('/api/broker/paper-account', { headers: auth.getAuthHeaders() })
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
       ]);
 
       if (portRes && Array.isArray(portRes.holdings)) {
-        // Automatic legacy migration: if backend is empty and localStorage has legacy positions, migrate them
-        if (portRes.holdings.length === 0 && typeof window !== 'undefined') {
+        // Safe legacy localStorage migration:
+        // Preserves unmigrated records until confirmed saved, and prevents duplicate additions
+        if (typeof window !== 'undefined') {
           const savedLegacy = localStorage.getItem(storageKey);
           if (savedLegacy) {
             try {
               const legacyList = JSON.parse(savedLegacy);
               if (Array.isArray(legacyList) && legacyList.length > 0) {
+                const existingSymbols = new Set(portRes.holdings.map((h: any) => h.symbol.toUpperCase()));
+                const unmigrated: any[] = [];
+                let anyAdded = false;
+
                 for (const item of legacyList) {
-                  if (item.symbol && item.qty > 0 && item.avg_price > 0) {
-                    await api.addHolding(item.symbol, Number(item.qty), Number(item.avg_price)).catch(() => null);
+                  const sym = (item.symbol || '').trim().toUpperCase();
+                  if (!sym || item.qty <= 0 || item.avg_price <= 0) continue;
+
+                  if (existingSymbols.has(sym)) {
+                    // Already persisted in database
+                    continue;
+                  }
+
+                  try {
+                    const addRes = await api.addHolding(sym, Number(item.qty), Number(item.avg_price));
+                    if (addRes && !addRes.error) {
+                      existingSymbols.add(sym);
+                      anyAdded = true;
+                    } else {
+                      unmigrated.push(item);
+                    }
+                  } catch {
+                    unmigrated.push(item);
                   }
                 }
-                localStorage.removeItem(storageKey);
-                const migratedPort = await api.getPortfolio().catch(() => null);
-                if (migratedPort) {
-                  setPortfolio(migratedPort);
-                  return;
+
+                if (unmigrated.length === 0) {
+                  localStorage.removeItem(storageKey);
+                } else {
+                  localStorage.setItem(storageKey, JSON.stringify(unmigrated));
+                }
+
+                if (anyAdded) {
+                  const refreshedPort = await api.getPortfolio().catch(() => null);
+                  if (refreshedPort) {
+                    setPortfolio(refreshedPort);
+                    return;
+                  }
                 }
               }
             } catch (err) {
@@ -125,48 +157,30 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
         setPortfolio(portRes);
       }
 
-      if (paperRes && Array.isArray(paperRes.paper_orders || paperRes.orders)) {
-        const orders = paperRes.paper_orders || paperRes.orders;
-        setPaperOrders(orders);
+      if (paperOrdersRes && Array.isArray(paperOrdersRes.paper_orders || paperOrdersRes.orders)) {
+        setPaperOrders(paperOrdersRes.paper_orders || paperOrdersRes.orders);
+      }
 
-        // Derive paper positions from filled paper orders
-        const posMap: Record<string, { qty: number; totalCost: number }> = {};
-        const filled = orders.filter((o: any) => o.status === 'FILLED');
-        for (const ord of filled) {
-          const sym = ord.symbol.toUpperCase();
-          const q = Number(ord.quantity);
-          const p = Number(ord.price || 0);
-          if (!posMap[sym]) posMap[sym] = { qty: 0, totalCost: 0 };
-          if (ord.transaction_type === 'BUY') {
-            posMap[sym].qty += q;
-            posMap[sym].totalCost += q * p;
-          } else if (ord.transaction_type === 'SELL') {
-            const currentAvg = posMap[sym].qty > 0 ? posMap[sym].totalCost / posMap[sym].qty : 0;
-            posMap[sym].qty -= q;
-            posMap[sym].totalCost = Math.max(0, posMap[sym].totalCost - q * currentAvg);
-          }
-        }
+      // Read canonical paper positions from the authoritative account service
+      // Includes complete history (>100 records), execution-order sorting, and fee accounting
+      if (paperAccountRes?.success && paperAccountRes?.account?.positions) {
+        const canonicalPositions: PaperPosition[] = Object.values(paperAccountRes.account.positions)
+          .filter((p: any) => p.quantity > 0)
+          .map((p: any) => ({
+            symbol: p.symbol,
+            quantity: p.quantity,
+            avg_price: p.avg_price,
+            current_price: null,
+            invested: p.total_invested,
+            current_value: null,
+            pnl: null,
+            pnl_pct: null,
+          }));
 
-        const derivedPositions: PaperPosition[] = [];
-        for (const [sym, data] of Object.entries(posMap)) {
-          if (data.qty > 0) {
-            const avg = data.qty > 0 ? data.totalCost / data.qty : 0;
-            derivedPositions.push({
-              symbol: sym,
-              quantity: data.qty,
-              avg_price: avg,
-              current_price: null,
-              invested: data.totalCost,
-              current_value: null,
-              pnl: null,
-              pnl_pct: null,
-            });
-          }
-        }
-        setPaperPositions(derivedPositions);
+        setPaperPositions(canonicalPositions);
 
-        // Fetch quotes for derived paper positions
-        for (const pos of derivedPositions) {
+        // Fetch live quotes for canonical paper positions
+        for (const pos of canonicalPositions) {
           void api.getQuoteData(pos.symbol).then((q) => {
             if (typeof q?.price === 'number' && q.price > 0) {
               setPaperPositions((prev) =>

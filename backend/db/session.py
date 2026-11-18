@@ -31,8 +31,50 @@ def get_db():
         db.close()
 
 
-def init_db():
-    """Create database tables."""
-    from db.models import Base
+def apply_migrations(bind_engine=None):
+    """
+    Applies forward schema migrations to ensure existing populated databases
+    are compatible with current application requirements without data loss.
+    Removes legacy uniqueness restrictions on display names while preserving lookup indexes.
+    """
+    eng = bind_engine or engine
+    from sqlalchemy import text
+    backend_name = eng.dialect.name
+    with eng.connect() as conn:
+        trans = conn.begin()
+        try:
+            if backend_name == "postgresql":
+                conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key;"))
+                conn.execute(text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_indexes 
+                            WHERE tablename = 'users' AND indexname = 'ix_users_username'
+                            AND indexdef LIKE '%UNIQUE%'
+                        ) THEN
+                            DROP INDEX ix_users_username;
+                        END IF;
+                    END
+                    $$;
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users (username);"))
+            elif backend_name == "sqlite":
+                try:
+                    conn.execute(text("DROP INDEX IF EXISTS ix_users_username;"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users (username);"))
+                except Exception:
+                    pass
+            trans.commit()
+        except Exception:
+            trans.rollback()
+            # If table doesn't exist yet, create_all will create it fresh
+            pass
 
-    Base.metadata.create_all(bind=engine)
+
+def init_db(bind_engine=None):
+    """Create database tables and apply forward schema migrations."""
+    from db.models import Base
+    eng = bind_engine or engine
+    Base.metadata.create_all(bind=eng)
+    apply_migrations(eng)

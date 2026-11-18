@@ -216,7 +216,7 @@ export default function StockAnalysisPage() {
     try {
       const user = auth.getUser();
       const userSpecificKey = user?.id ? `stockai_risk_settings_${user.id}` : null;
-      const stored = (userSpecificKey ? localStorage.getItem(userSpecificKey) : null) || localStorage.getItem('stockai_risk_settings');
+      const stored = userSpecificKey ? localStorage.getItem(userSpecificKey) : null;
       if (stored) {
         const parsed = JSON.parse(stored);
         if (typeof parsed.accountCapital === 'number' && parsed.accountCapital > 0) {

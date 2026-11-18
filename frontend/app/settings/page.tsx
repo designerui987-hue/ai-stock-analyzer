@@ -61,11 +61,11 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
-    // Restore risk settings from account-scoped or local storage
+    // Restore risk settings from strictly account-scoped storage (no cross-account shared fallback)
     try {
       const user = auth.getUser();
       const userKey = user?.id ? `stockai_risk_settings_${user.id}` : null;
-      const savedRisk = (userKey ? localStorage.getItem(userKey) : null) || localStorage.getItem('stockai_risk_settings');
+      const savedRisk = userKey ? localStorage.getItem(userKey) : null;
       if (savedRisk) {
         const parsed = JSON.parse(savedRisk);
         setSettings((prev) => ({
@@ -178,7 +178,6 @@ export default function SettingsPage() {
         maxConcentrationPct: settings.maxConcentrationPct,
         maxOpenPositions: settings.maxOpenPositions,
       });
-      localStorage.setItem('stockai_risk_settings', riskPayload);
       if (user?.id) {
         localStorage.setItem(`stockai_risk_settings_${user.id}`, riskPayload);
       }

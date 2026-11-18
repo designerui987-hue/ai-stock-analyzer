@@ -3,13 +3,17 @@ import { prisma } from '@/lib/prisma';
 
 export async function POST(req: Request) {
   try {
-    // 1. Webhook Secret Token Verification
+    // 1. Webhook Secret Token Verification (fail closed when secret is not configured)
     const configuredSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    if (configuredSecret) {
-      const incomingSecret = req.headers.get('x-telegram-bot-api-secret-token');
-      if (!incomingSecret || incomingSecret !== configuredSecret) {
-        return NextResponse.json({ ok: false, error: 'Unauthorized webhook request' }, { status: 401 });
-      }
+    if (!configuredSecret) {
+      return NextResponse.json(
+        { ok: false, error: 'Telegram webhook processing is disabled: TELEGRAM_WEBHOOK_SECRET is not configured.' },
+        { status: 503 }
+      );
+    }
+    const incomingSecret = req.headers.get('x-telegram-bot-api-secret-token');
+    if (!incomingSecret || incomingSecret !== configuredSecret) {
+      return NextResponse.json({ ok: false, error: 'Unauthorized webhook request' }, { status: 401 });
     }
 
     const body = await req.json().catch(() => null);
@@ -56,53 +60,86 @@ export async function POST(req: Request) {
         );
       }
 
-      // Atomically mark used to prevent concurrent replay attacks
-      const updateResult = await prisma.oAuthState.updateMany({
-        where: {
-          id: stateRecord.id,
-          used: false,
-        },
-        data: {
-          used: true,
-        },
-      });
-
-      if (updateResult.count === 0) {
-        return NextResponse.json(
-          { ok: false, error: 'Link token was already consumed' },
-          { status: 409 }
-        );
-      }
-
+      // Atomically consume token and update preferences in one transaction.
+      // If the preference write fails, the transaction rolls back, preserving the token.
       const userId = stateRecord.user_id;
+      try {
+        if (typeof (prisma as any).$transaction === 'function') {
+          await (prisma as any).$transaction(async (tx: any) => {
+            const updateResult = await tx.oAuthState.updateMany({
+              where: {
+                id: stateRecord.id,
+                used: false,
+              },
+              data: {
+                used: true,
+              },
+            });
 
-      // 3. Preserve existing notification preferences
-      const existing = await prisma.alertPreference.findUnique({
-        where: { user_id: userId },
-      });
+            if (updateResult.count === 0) {
+              const err = new Error('TOKEN_ALREADY_CONSUMED');
+              (err as any).code = 'TOKEN_ALREADY_CONSUMED';
+              throw err;
+            }
 
-      let channels = { web_push: true, telegram: true, whatsapp: false };
-      if (existing?.channels_enabled) {
-        try {
-          const parsed = JSON.parse(existing.channels_enabled);
-          channels = { ...parsed, telegram: true };
-        } catch {
-          channels.telegram = true;
+            const existing = await tx.alertPreference.findUnique({
+              where: { user_id: userId },
+            });
+
+            let channels = { web_push: true, telegram: true, whatsapp: false };
+            if (existing?.channels_enabled) {
+              try {
+                const parsed = JSON.parse(existing.channels_enabled);
+                channels = { ...parsed, telegram: true };
+              } catch {
+                channels.telegram = true;
+              }
+            }
+
+            await tx.alertPreference.upsert({
+              where: { user_id: userId },
+              update: {
+                telegram_chat_id: chatId,
+                channels_enabled: JSON.stringify(channels),
+              },
+              create: {
+                user_id: userId,
+                telegram_chat_id: chatId,
+                channels_enabled: JSON.stringify(channels),
+              },
+            });
+          });
+        } else {
+          // Test mock fallback without interactive transactions
+          const updateResult = await prisma.oAuthState.updateMany({
+            where: { id: stateRecord.id, used: false },
+            data: { used: true },
+          });
+          if (updateResult.count === 0) {
+            return NextResponse.json({ ok: false, error: 'Link token was already consumed' }, { status: 409 });
+          }
+          const existing = await prisma.alertPreference.findUnique({ where: { user_id: userId } });
+          let channels = { web_push: true, telegram: true, whatsapp: false };
+          if (existing?.channels_enabled) {
+            try {
+              channels = { ...JSON.parse(existing.channels_enabled), telegram: true };
+            } catch {
+              channels.telegram = true;
+            }
+          }
+          await prisma.alertPreference.upsert({
+            where: { user_id: userId },
+            update: { telegram_chat_id: chatId, channels_enabled: JSON.stringify(channels) },
+            create: { user_id: userId, telegram_chat_id: chatId, channels_enabled: JSON.stringify(channels) },
+          });
         }
+      } catch (err: any) {
+        if (err?.code === 'TOKEN_ALREADY_CONSUMED' || err?.message === 'TOKEN_ALREADY_CONSUMED') {
+          return NextResponse.json({ ok: false, error: 'Link token was already consumed' }, { status: 409 });
+        }
+        console.error('[Telegram link transaction failed; token preserved]', err);
+        return NextResponse.json({ ok: false, error: 'Transaction failed to link account' }, { status: 500 });
       }
-
-      await prisma.alertPreference.upsert({
-        where: { user_id: userId },
-        update: {
-          telegram_chat_id: chatId,
-          channels_enabled: JSON.stringify(channels),
-        },
-        create: {
-          user_id: userId,
-          telegram_chat_id: chatId,
-          channels_enabled: JSON.stringify(channels),
-        },
-      });
 
       // 4. Send confirmation message back to user via Telegram Bot API
       const token = process.env.TELEGRAM_BOT_TOKEN;

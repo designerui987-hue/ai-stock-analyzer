@@ -85,6 +85,7 @@ jobs:
           npx tsx lib/api-stream-recovery.test.ts
           npx tsx lib/telegram-security.test.ts
           npx tsx lib/paper-account-ledger.test.ts
+          npx tsx lib/paper-concurrency-recheck.test.ts
 
       - name: Build Next.js Production Bundle
         run: npm run build
