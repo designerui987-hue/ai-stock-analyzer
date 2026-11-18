@@ -42,8 +42,54 @@ import { ModelVote } from '@/lib/explainability/factorMapping';
  * fake XGBoost/LightGBM/Neural Net/Prophet scores (removed per AGENTS.md).
  * Rule-based factors from the deterministic engine are shown directly.
  */
-function adaptBackendAIToFrontend(backendAIInput: any, technicals?: any) {
-  const backendAI = backendAIInput || { status: 'unavailable', reason: 'Quantitative models loading or unavailable' };
+interface FrontendAI {
+  is_unavailable: boolean;
+  status: string;
+  reason?: string;
+  rule_version: string;
+  signal: string;
+  confidence: number;
+  risk: string;
+  riskScore: number;
+  entry: number;
+  target: number;
+  stopLoss: number;
+  upside: number;
+  profitProb: number;
+  reasons: string[];
+  pe: number | null;
+  rsi: number | null;
+  macd: number | null;
+  analysis_mode: string;
+  model_votes: ModelVote[];
+  consensus_summary: string | null;
+}
+
+function adaptBackendAIToFrontend(backendAI: any, technicals?: any): FrontendAI {
+  if (!backendAI) {
+    return {
+      is_unavailable: true,
+      status: 'unavailable',
+      reason: 'Quantitative models unavailable',
+      rule_version: 'tech_consensus_v1',
+      signal: 'UNAVAILABLE',
+      confidence: 0,
+      risk: 'Medium',
+      riskScore: 5,
+      entry: 0,
+      target: 0,
+      stopLoss: 0,
+      upside: 0,
+      profitProb: 0,
+      reasons: ['Quantitative models unavailable'],
+      pe: null,
+      rsi: null,
+      macd: null,
+      analysis_mode: 'deterministic_quant',
+      model_votes: [],
+      consensus_summary: null,
+    };
+  }
 
   // RSI/MACD may be numbers OR {status:'unavailable'} objects from the backend
   const rsiRaw = backendAI.rsi ?? technicals?.rsi;
@@ -59,7 +105,7 @@ function adaptBackendAIToFrontend(backendAIInput: any, technicals?: any) {
 
   return {
     is_unavailable: isUnavailable,
-    status: backendAI.status,
+    status: backendAI.status || (isUnavailable ? 'unavailable' : 'available'),
     reason: backendAI.reason,
     rule_version: backendAI.rule_version || 'tech_consensus_v1',
     signal: (backendAI.signal ?? (isUnavailable ? 'UNAVAILABLE' : 'HOLD')) as string,
@@ -102,7 +148,7 @@ export default function StockAnalysisPage() {
         if (res?.success && Array.isArray(res.items)) {
           setWatchlisted(res.items.some((item: any) => item.symbol.toUpperCase() === symbol));
         }
-      }).catch(() => {});
+      }).catch(() => { });
 
       // Fetch Analysis from backend (includes unified market data + AI-assisted quant analysis)
       api.getStockAnalysis(symbol)
@@ -120,7 +166,7 @@ export default function StockAnalysisPage() {
             setNotFound(true);
           }
         });
-        
+
       // Fetch Initial Chart Data
       fetchChartForRange('1M');
 
@@ -180,7 +226,7 @@ export default function StockAnalysisPage() {
           setCalcRiskPct(parsed.riskPerTradePct);
         }
       }
-    } catch {}
+    } catch { }
   }, []);
 
   const handleToggleWatchlist = async () => {
@@ -254,7 +300,7 @@ export default function StockAnalysisPage() {
   const ai = aiRaw ? adaptBackendAIToFrontend(aiRaw, techRaw) : (
     liveStock ? adaptBackendAIToFrontend({ status: 'unavailable', reason: liveStock.reason || 'Quantitative models unavailable' }) : adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading Quantitative Analysis...', factors: [], prediction_models: {} })!
   );
-  
+
   const isUp = stock.change_pct >= 0;
 
   // Position Sizing Calculator State (defaults to 11,83,500 capital & 1% risk)
@@ -434,9 +480,8 @@ export default function StockAnalysisPage() {
               ₹{stock.price.toLocaleString('en-IN')}
             </div>
             <div
-              className={`text-caption font-medium mt-0.5 ${
-                isUp ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-              }`}
+              className={`text-caption font-medium mt-0.5 ${isUp ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+                }`}
             >
               {isUp ? '+' : ''}
               {stock.change_pct.toFixed(2)}% Today
@@ -476,11 +521,10 @@ export default function StockAnalysisPage() {
           <Link
             key={sym}
             href={`/stocks/${sym}`}
-            className={`px-3 py-1.5 rounded-btn text-xs font-medium shrink-0 transition-colors ${
-              sym === symbol
-                ? 'bg-indigo-600 text-white shadow-subtle'
-                : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
+            className={`px-3 py-1.5 rounded-btn text-xs font-medium shrink-0 transition-colors ${sym === symbol
+              ? 'bg-indigo-600 text-white shadow-subtle'
+              : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
           >
             {sym}
           </Link>
@@ -654,13 +698,12 @@ export default function StockAnalysisPage() {
                 </p>
                 <div className="flex items-baseline space-x-3 mt-1">
                   <span
-                    className={`text-display font-semibold ${
-                      ai.signal === 'BUY'
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : ai.signal === 'SELL'
+                    className={`text-display font-semibold ${ai.signal === 'BUY'
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : ai.signal === 'SELL'
                         ? 'text-red-600 dark:text-red-400'
                         : 'text-amber-600 dark:text-amber-400'
-                    }`}
+                      }`}
                   >
                     {ai.signal}
                   </span>
@@ -789,13 +832,12 @@ export default function StockAnalysisPage() {
                     <div className="flex items-center space-x-1.5">
                       <span className="text-slate-500">Risk:Reward Ratio:</span>
                       <span
-                        className={`font-bold ${
-                          sizingResult.rr_quality === 'EXCELLENT'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : sizingResult.rr_quality === 'GOOD'
+                        className={`font-bold ${sizingResult.rr_quality === 'EXCELLENT'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : sizingResult.rr_quality === 'GOOD'
                             ? 'text-amber-600 dark:text-amber-400'
                             : 'text-red-600 dark:text-red-400'
-                        }`}
+                          }`}
                       >
                         1 : {sizingResult.risk_reward_ratio}
                       </span>
@@ -804,16 +846,16 @@ export default function StockAnalysisPage() {
                           sizingResult.rr_quality === 'EXCELLENT'
                             ? 'emerald'
                             : sizingResult.rr_quality === 'GOOD'
-                            ? 'amber'
-                            : 'red'
+                              ? 'amber'
+                              : 'red'
                         }
                         size="sm"
                       >
                         {sizingResult.rr_quality === 'EXCELLENT'
                           ? 'Favorable (≥1:2)'
                           : sizingResult.rr_quality === 'GOOD'
-                          ? 'Acceptable'
-                          : 'Poor R:R'}
+                            ? 'Acceptable'
+                            : 'Poor R:R'}
                       </Badge>
                     </div>
 
@@ -844,9 +886,8 @@ export default function StockAnalysisPage() {
                         setConfirmLiveTicket(false);
                         setIsOrderModalOpen(true);
                       }}
-                      className={`w-full justify-center text-xs font-semibold ${
-                        ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700 !text-white'
-                      }`}
+                      className={`w-full justify-center text-xs font-semibold ${ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700 !text-white'
+                        }`}
                     >
                       Review {ai.signal} order · {sizingResult.position_size_shares} shares
                     </Button>
@@ -933,11 +974,10 @@ export default function StockAnalysisPage() {
                       <button
                         type="button"
                         onClick={() => { setOrderMode('PAPER'); setLiveOptIn(false); }}
-                        className={`p-2.5 rounded-lg border text-left transition-all ${
-                          orderMode === 'PAPER'
-                            ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 ring-1 ring-indigo-600'
-                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
-                        }`}
+                        className={`p-2.5 rounded-lg border text-left transition-all ${orderMode === 'PAPER'
+                          ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 ring-1 ring-indigo-600'
+                          : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                          }`}
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-xs">📝 Paper Trading</span>
@@ -950,19 +990,18 @@ export default function StockAnalysisPage() {
                         type="button"
                         onClick={() => setOrderMode('LIVE')}
                         disabled={!liveTradingEnabled || !brokerConnected}
-                        className={`p-2.5 rounded-lg border text-left transition-all disabled:opacity-60 ${
-                          orderMode === 'LIVE'
-                            ? 'border-amber-600 bg-amber-50/60 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-1 ring-amber-600'
-                            : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
-                        }`}
+                        className={`p-2.5 rounded-lg border text-left transition-all disabled:opacity-60 ${orderMode === 'LIVE'
+                          ? 'border-amber-600 bg-amber-50/60 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 ring-1 ring-amber-600'
+                          : 'border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-400'
+                          }`}
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-xs">⚡ Live Kite Trading</span>
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 font-medium">Opt-in</span>
                         </div>
                         <p className="text-[10px] text-slate-500 mt-0.5">{!liveTradingEnabled
-                            ? 'Real-money trading is disabled.'
-                            : !brokerConnected ? 'Connect Zerodha Kite in Settings.' : 'Uses real funds through Zerodha Kite.'}</p>
+                          ? 'Real-money trading is disabled.'
+                          : !brokerConnected ? 'Connect Zerodha Kite in Settings.' : 'Uses real funds through Zerodha Kite.'}</p>
                       </button>
                     </div>
 
@@ -1092,8 +1131,8 @@ export default function StockAnalysisPage() {
                       {orderSubmitting
                         ? 'Executing Order...'
                         : orderMode === 'PAPER'
-                        ? `Confirm & Place Paper ${ai.signal}`
-                        : `Confirm & Place Live Kite ${ai.signal}`}
+                          ? `Confirm & Place Paper ${ai.signal}`
+                          : `Confirm & Place Live Kite ${ai.signal}`}
                     </Button>
                   </div>
                 </div>

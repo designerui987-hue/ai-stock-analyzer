@@ -18,11 +18,9 @@ const AddWatchlistSchema = z.object({
     .string()
     .default('NSE')
     .transform((s) => s.trim().toUpperCase())
-    .pipe(
-      z.enum(['NSE', 'BSE'] as const, {
-        message: "Unsupported exchange. Only 'NSE' and 'BSE' are supported.",
-      })
-    ),
+    .refine((val) => val === 'NSE' || val === 'BSE', {
+      message: "Unsupported exchange. Only 'NSE' and 'BSE' are supported.",
+    }),
   notes: z.string().max(255).optional(),
 });
 

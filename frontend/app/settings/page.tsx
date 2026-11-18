@@ -76,7 +76,7 @@ export default function SettingsPage() {
           maxOpenPositions: typeof parsed.maxOpenPositions === 'number' ? parsed.maxOpenPositions : prev.maxOpenPositions,
         }));
       }
-    } catch {}
+    } catch { }
 
     // Fetch broker connection status
     fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
@@ -271,16 +271,14 @@ export default function SettingsPage() {
                     [item.key]: !settings[item.key as keyof typeof settings],
                   })
                 }
-                className={`w-11 h-6 rounded-full relative transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/40 ${
-                  settings[item.key as keyof typeof settings]
-                    ? 'bg-indigo-600'
-                    : 'bg-slate-200 dark:bg-slate-800'
-                }`}
+                className={`w-11 h-6 rounded-full relative transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/40 ${settings[item.key as keyof typeof settings]
+                  ? 'bg-indigo-600'
+                  : 'bg-slate-200 dark:bg-slate-800'
+                  }`}
               >
                 <span
-                  className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-150 ease-out ${
-                    settings[item.key as keyof typeof settings] ? 'translate-x-6' : 'translate-x-1'
-                  }`}
+                  className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-150 ease-out ${settings[item.key as keyof typeof settings] ? 'translate-x-6' : 'translate-x-1'
+                    }`}
                 />
               </button>
             </div>
@@ -480,10 +478,10 @@ export default function SettingsPage() {
                 {waSaveStatus === 'saving'
                   ? 'Saving…'
                   : waSaveStatus === 'saved'
-                  ? '✓ Phone Number Saved!'
-                  : waSaveStatus === 'error'
-                  ? 'Save Failed. Try Again'
-                  : 'Save Phone Number'}
+                    ? '✓ Phone Number Saved!'
+                    : waSaveStatus === 'error'
+                      ? 'Save Failed. Try Again'
+                      : 'Save Phone Number'}
               </button>
             </div>
           </div>
