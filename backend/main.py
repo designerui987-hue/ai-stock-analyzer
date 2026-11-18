@@ -17,6 +17,7 @@ async def lifespan(app: FastAPI):
     paper_worker = None
     if settings.kite_ws_enabled and settings.paper_order_evaluation_url:
         worker = PaperOrderWorker(settings.paper_order_evaluation_url, settings.cron_secret or "")
+        app.state.paper_worker = worker
         paper_worker = asyncio.create_task(worker.run())
     try:
         yield
@@ -65,6 +66,16 @@ async def health():
 
     ws_health = kite_ws_collector.get_health_summary()
     ws_health.pop("connection_states", None)
+
+    evaluator_info = None
+    if hasattr(app.state, "paper_worker") and app.state.paper_worker:
+        w = app.state.paper_worker
+        evaluator_info = {
+            "healthy": w.evaluator_healthy,
+            "pending_retries": w.pending_retries,
+            "last_error": w.last_evaluator_error,
+        }
+
     return {
         "status": "healthy",
         "live_data": bool(ws_health["active_connections"] > 0),
@@ -75,6 +86,7 @@ async def health():
             "redis_connected": market_data_service.cache.is_redis_connected,
             "market_session": get_market_session(),
         },
+        "paper_evaluator": evaluator_info,
     }
 
 

@@ -7,7 +7,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "npx tsx lib/signal-resolution.test.ts && npx tsx lib/auth-lockdown.test.ts && npx tsx lib/audit-regressions.test.ts && npx tsx lib/kite-oauth-concurrency.test.ts && npx tsx lib/paper-limit-order-lifecycle.test.ts && npx tsx lib/api-stream-recovery.test.ts",
+    "test": "npx tsx lib/signal-resolution.test.ts && npx tsx lib/auth-lockdown.test.ts && npx tsx lib/audit-regressions.test.ts && npx tsx lib/kite-oauth-concurrency.test.ts && npx tsx lib/paper-limit-order-lifecycle.test.ts && npx tsx lib/api-stream-recovery.test.ts && npx tsx lib/telegram-security.test.ts && npx tsx lib/paper-account-ledger.test.ts",
     "db:setup": "node scripts/bootstrap-db.mjs"
   },
   "dependencies": {

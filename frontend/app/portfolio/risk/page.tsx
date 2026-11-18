@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
 import { DEMO_PORTFOLIO } from '@/lib/data';
 import {
   calculatePortfolioHeat,
@@ -26,23 +27,35 @@ export default function PortfolioRiskDashboard() {
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
   if (!isDemoMode) {
     return (
-      <div className="max-w-4xl mx-auto space-y-6 py-8">
+      <div className="max-w-4xl mx-auto space-y-6 py-8 animate-fade-in">
         <div>
           <h1 className="text-display font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <ShieldAlert className="text-indigo-600 dark:text-indigo-400" /> Portfolio Risk Dashboard
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Live broker holdings risk telemetry is unavailable (`DEMO_MODE=false`).
+            Real-time portfolio heat, drawdown protection, and sector concentration risk telemetry.
           </p>
         </div>
-        <Card className="p-6 space-y-3 border-amber-500/30">
-          <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-semibold text-sm">
-            <AlertTriangle className="w-4 h-4" />
-            <span>Account Holdings Unavailable</span>
+        <Card className="p-8 space-y-4 border-slate-200 dark:border-white/[0.08]">
+          <div className="flex items-center space-x-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm">
+            <Info className="w-5 h-5" />
+            <span>Live Portfolio Telemetry Awaiting Active Account</span>
           </div>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Static sample holdings (`DEMO_PORTFOLIO`) are disabled unless `DEMO_MODE=true` is explicitly set. Connect your Zerodha Kite account in Settings or place simulated trades in the Paper Ledger.
+          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+            In accordance with our strict data integrity policy, synthetic portfolio risk calculations are never shown with placeholder fixtures. To view live portfolio heat and open risk calculations, add positions to your database Portfolio or connect your Zerodha Kite broker account.
           </p>
+          <div className="pt-3 flex flex-wrap gap-3">
+            <Link href="/portfolio">
+              <Button variant="primary" size="sm">
+                Open Portfolio Manager →
+              </Button>
+            </Link>
+            <Link href="/settings">
+              <Button variant="outline" size="sm">
+                Connect Zerodha Kite in Settings
+              </Button>
+            </Link>
+          </div>
         </Card>
       </div>
     );

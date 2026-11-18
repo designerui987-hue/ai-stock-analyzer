@@ -1,15 +1,23 @@
 """Portfolio management API endpoints."""
 
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from db.session import get_db
 from db.models import Portfolio, Holding
 from auth.security import get_current_user
 from services import PortfolioService
 
 router = APIRouter()
+
+
+class HoldingRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=30)
+    qty: int = Field(gt=0)
+    avg_price: float = Field(gt=0.0)
+    exchange: Optional[str] = "NSE"
 
 
 @router.get("/")
@@ -19,6 +27,41 @@ async def get_portfolio(
 ):
     """Get user's portfolio summary and holdings."""
     return PortfolioService.get_portfolio_summary(int(user_id), db)
+
+
+@router.post("/holdings")
+async def add_holding(
+    req: HoldingRequest,
+    user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add or update holding in user's portfolio."""
+    sym = req.symbol.strip().upper()
+    holding = PortfolioService.add_holding(int(user_id), sym, req.qty, req.avg_price, db)
+    return {
+        "success": True,
+        "holding": {
+            "id": holding.id,
+            "symbol": holding.symbol,
+            "qty": holding.qty,
+            "avg_price": holding.avg_price,
+        }
+    }
+
+
+@router.delete("/holdings/{symbol}")
+async def remove_holding(
+    symbol: str,
+    qty: Optional[int] = Query(None, gt=0),
+    user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove holding from user's portfolio."""
+    sym = symbol.strip().upper()
+    success = PortfolioService.remove_holding(int(user_id), sym, qty, db)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Holding '{sym}' not found in portfolio.")
+    return {"success": True, "symbol": sym}
 
 
 @router.get("/performance")

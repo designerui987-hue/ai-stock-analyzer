@@ -24,18 +24,20 @@ export interface WhatsAppPayload {
 export async function sendWhatsAppAlert(
   phoneNumber: string | null,
   payload: WhatsAppPayload
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; status?: 'sent' | 'failed' | 'unavailable'; error?: string }> {
   if (!phoneNumber) {
-    return { success: false, error: 'WhatsApp phone number missing' };
+    return { success: false, status: 'unavailable', error: 'WhatsApp phone number missing' };
   }
 
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
   if (!token || !phoneId) {
-    // Simulated delivery for development mode
-    console.log(`[WhatsApp Mock Send to ${phoneNumber}]:`, `${payload.signalType} ${payload.symbol} @ ₹${payload.price}`);
-    return { success: true };
+    return {
+      success: false,
+      status: 'unavailable',
+      error: 'WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID not configured on server.',
+    };
   }
 
   try {

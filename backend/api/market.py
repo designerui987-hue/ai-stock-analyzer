@@ -235,6 +235,8 @@ async def market_heatmap():
             "name": s["name"],
             "sector": s.get("sector", "Equity"),
             "change": s.get("change_percent"),
+            "change_percent": s.get("change_percent"),
+            "change_pct": s.get("change_percent"),
             "price": s["price"],
             "source": s.get("source"),
             "as_of": s.get("as_of"),

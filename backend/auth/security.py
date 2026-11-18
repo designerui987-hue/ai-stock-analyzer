@@ -14,15 +14,19 @@ ALGORITHM = "HS256"
 
 
 def hash_password(password: str) -> str:
-    # bcrypt/pbkdf2 safe truncation if necessary
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) > 72:
-        password = password_bytes[:72].decode('utf-8', errors='ignore')
+    """Hash password consistently using passlib pbkdf2_sha256."""
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify password with fallback for legacy 72-byte truncated hashes."""
+    if pwd_context.verify(plain_password, hashed_password):
+        return True
+    # Backwards compatibility check for any legacy accounts with 72-byte truncation
+    truncated = plain_password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+    if truncated != plain_password:
+        return pwd_context.verify(truncated, hashed_password)
+    return False
 
 
 def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:

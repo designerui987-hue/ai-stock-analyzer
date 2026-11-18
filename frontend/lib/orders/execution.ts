@@ -383,6 +383,7 @@ export function checkPaperLimitSatisfaction(params: {
     order_type: string;
     product_type?: string;
     price: number | null; // Limit price
+    trigger_price?: number | null;
     placed_at?: Date | string;
   };
   quote: ServerQuotePayload | null;
@@ -397,15 +398,7 @@ export function checkPaperLimitSatisfaction(params: {
     return {
       satisfied: false,
       sessionName: session.session,
-      reason: `Cannot fill paper limit order while NSE session is ${session.session}.`,
-    };
-  }
-
-  const limitPrice = params.order.price;
-  if (!limitPrice || limitPrice <= 0) {
-    return {
-      satisfied: false,
-      reason: 'LIMIT order has invalid or non-positive limit price.',
+      reason: `Cannot fill paper order while NSE session is ${session.session}.`,
     };
   }
 
@@ -427,6 +420,81 @@ export function checkPaperLimitSatisfaction(params: {
 
   const quotePrice = quoteCheck.price;
   const slipFrac = 5 / 10000; // 5 bps modeled impact
+  const isStopLoss = params.order.order_type === 'SL' || params.order.order_type === 'SL_M';
+
+  if (isStopLoss) {
+    const triggerPrice = params.order.trigger_price ?? params.order.price;
+    if (!triggerPrice || triggerPrice <= 0) {
+      return {
+        satisfied: false,
+        reason: 'STOP LOSS order has invalid or non-positive trigger price.',
+      };
+    }
+
+    if (params.order.transaction_type === 'SELL') {
+      if (quotePrice > triggerPrice) {
+        return {
+          satisfied: false,
+          quoteAsOf: quoteCheck.asOf,
+          quoteSource: quoteCheck.source,
+          sessionName: session.session,
+          reason: `SELL SL resting OPEN: Quote price ₹${quotePrice.toFixed(2)} is above trigger ₹${triggerPrice.toFixed(2)}.`,
+        };
+      }
+      const rawFill = Math.min(triggerPrice, quotePrice) * (1 - slipFrac);
+      const fillPrice = Number(rawFill.toFixed(2));
+      const fees = calculateIndianEquityFees(
+        fillPrice * params.order.quantity,
+        'SELL',
+        (params.order.product_type as any) || 'CNC'
+      );
+      return {
+        satisfied: true,
+        fillPrice,
+        fees: fees.total_fees,
+        feeBreakdown: fees,
+        quoteAsOf: quoteCheck.asOf,
+        quoteSource: quoteCheck.source,
+        sessionName: session.session,
+        reason: `SELL SL triggered and filled at ₹${fillPrice.toFixed(2)} on trigger ₹${triggerPrice.toFixed(2)}.`,
+      };
+    } else {
+      if (quotePrice < triggerPrice) {
+        return {
+          satisfied: false,
+          quoteAsOf: quoteCheck.asOf,
+          quoteSource: quoteCheck.source,
+          sessionName: session.session,
+          reason: `BUY SL resting OPEN: Quote price ₹${quotePrice.toFixed(2)} is below trigger ₹${triggerPrice.toFixed(2)}.`,
+        };
+      }
+      const rawFill = Math.max(triggerPrice, quotePrice) * (1 + slipFrac);
+      const fillPrice = Number(rawFill.toFixed(2));
+      const fees = calculateIndianEquityFees(
+        fillPrice * params.order.quantity,
+        'BUY',
+        (params.order.product_type as any) || 'CNC'
+      );
+      return {
+        satisfied: true,
+        fillPrice,
+        fees: fees.total_fees,
+        feeBreakdown: fees,
+        quoteAsOf: quoteCheck.asOf,
+        quoteSource: quoteCheck.source,
+        sessionName: session.session,
+        reason: `BUY SL triggered and filled at ₹${fillPrice.toFixed(2)} on trigger ₹${triggerPrice.toFixed(2)}.`,
+      };
+    }
+  }
+
+  const limitPrice = params.order.price;
+  if (!limitPrice || limitPrice <= 0) {
+    return {
+      satisfied: false,
+      reason: 'LIMIT order has invalid or non-positive limit price.',
+    };
+  }
 
   if (params.order.transaction_type === 'BUY') {
     if (quotePrice > limitPrice) {
@@ -503,6 +571,7 @@ export async function executePaperLimitFill(
     quoteAsOf?: string;
     quoteSource?: string;
     sessionName?: string;
+    orderType?: string;
     nowUtc?: Date;
   }
 ): Promise<{ filled: boolean; count: number; reason: string }> {
@@ -512,7 +581,7 @@ export async function executePaperLimitFill(
       user_id: params.userId,
       mode: 'PAPER',
       broker: 'PAPER',
-      order_type: 'LIMIT',
+      order_type: params.orderType ?? 'LIMIT',
       status: 'OPEN',
     },
     data: {
@@ -531,7 +600,7 @@ export async function executePaperLimitFill(
         fees_inr: params.fees,
         fee_breakdown: params.feeBreakdown || null,
         filled_at: (params.nowUtc || new Date()).toISOString(),
-        reason: `Paper LIMIT filled at ₹${params.fillPrice} on limit condition satisfaction.`,
+        reason: `Paper order filled at ₹${params.fillPrice} on execution criteria satisfaction.`,
       }),
     },
   });
@@ -549,6 +618,84 @@ export async function executePaperLimitFill(
     count: 1,
     reason: `Order ${params.orderId} filled at ₹${params.fillPrice}.`,
   };
+}
+
+export async function spawnAttachedExitOrders(
+  prismaClient: any,
+  params: {
+    userId: string;
+    parentOrder: {
+      id: string;
+      symbol: string;
+      exchange: string;
+      quantity: number;
+      product_type: string;
+    };
+    targetPrice?: number | null;
+    stopLossPrice?: number | null;
+  }
+): Promise<string[]> {
+  const createdIds: string[] = [];
+
+  if (params.targetPrice && params.targetPrice > 0) {
+    const targetOrder = await prismaClient.orderLog.create({
+      data: {
+        user_id: params.userId,
+        broker: 'PAPER',
+        mode: 'PAPER',
+        exchange: params.parentOrder.exchange || 'NSE',
+        symbol: params.parentOrder.symbol,
+        transaction_type: 'SELL',
+        quantity: params.parentOrder.quantity,
+        order_type: 'LIMIT',
+        price: params.targetPrice,
+        trigger_price: null,
+        product_type: params.parentOrder.product_type || 'CNC',
+        source: 'ATTACHED_TARGET',
+        broker_order_id: `PAPER_${Date.now()}_TGT`,
+        status: 'OPEN',
+        response_raw: JSON.stringify({
+          mode: 'PAPER',
+          parent_order_id: params.parentOrder.id,
+          type: 'ATTACHED_TARGET',
+          created_at: new Date().toISOString(),
+          reason: `Attached profit target resting at ₹${params.targetPrice}`,
+        }),
+      },
+    });
+    createdIds.push(targetOrder.id);
+  }
+
+  if (params.stopLossPrice && params.stopLossPrice > 0) {
+    const slOrder = await prismaClient.orderLog.create({
+      data: {
+        user_id: params.userId,
+        broker: 'PAPER',
+        mode: 'PAPER',
+        exchange: params.parentOrder.exchange || 'NSE',
+        symbol: params.parentOrder.symbol,
+        transaction_type: 'SELL',
+        quantity: params.parentOrder.quantity,
+        order_type: 'SL',
+        price: params.stopLossPrice,
+        trigger_price: params.stopLossPrice,
+        product_type: params.parentOrder.product_type || 'CNC',
+        source: 'ATTACHED_STOP_LOSS',
+        broker_order_id: `PAPER_${Date.now()}_SL`,
+        status: 'OPEN',
+        response_raw: JSON.stringify({
+          mode: 'PAPER',
+          parent_order_id: params.parentOrder.id,
+          type: 'ATTACHED_STOP_LOSS',
+          created_at: new Date().toISOString(),
+          reason: `Attached stop loss resting at trigger ₹${params.stopLossPrice}`,
+        }),
+      },
+    });
+    createdIds.push(slOrder.id);
+  }
+
+  return createdIds;
 }
 
 /**
@@ -576,7 +723,7 @@ export async function evaluateRestingPaperOrdersWithQuote(
       status: 'OPEN',
       symbol: quoteSym,
       exchange: quoteExch,
-      order_type: 'LIMIT',
+      order_type: { in: ['LIMIT', 'SL', 'SL_M'] },
     },
   });
 
@@ -594,6 +741,7 @@ export async function evaluateRestingPaperOrdersWithQuote(
         order_type: order.order_type,
         product_type: order.product_type,
         price: order.price,
+        trigger_price: order.trigger_price,
         placed_at: order.placed_at,
       },
       quote,
@@ -610,12 +758,52 @@ export async function evaluateRestingPaperOrdersWithQuote(
         quoteAsOf: satisfaction.quoteAsOf,
         quoteSource: satisfaction.quoteSource,
         sessionName: satisfaction.sessionName,
+        orderType: order.order_type,
         nowUtc,
       });
 
       if (fillRes.filled) {
         filledCount++;
         results.push({ orderId: order.id, status: 'FILLED', reason: satisfaction.reason });
+
+        // Handle attached exits or OCO sibling cancellations
+        try {
+          const raw = JSON.parse(order.response_raw || '{}');
+
+          // If filled order was an attached exit (Target or SL), cancel OCO sibling
+          if (raw.parent_order_id && (order.source === 'ATTACHED_TARGET' || order.source === 'ATTACHED_STOP_LOSS')) {
+            await prismaClient.orderLog.updateMany({
+              where: {
+                user_id: userId,
+                mode: 'PAPER',
+                status: 'OPEN',
+                source: order.source === 'ATTACHED_TARGET' ? 'ATTACHED_STOP_LOSS' : 'ATTACHED_TARGET',
+                response_raw: { contains: raw.parent_order_id },
+              },
+              data: {
+                status: 'CANCELLED',
+              },
+            });
+          }
+
+          // If filled order had attached target or stop loss, spawn child exits
+          if (raw.attached_target_price || raw.attached_stop_loss_price) {
+            await spawnAttachedExitOrders(prismaClient, {
+              userId,
+              parentOrder: {
+                id: order.id,
+                symbol: order.symbol,
+                exchange: order.exchange,
+                quantity: order.quantity,
+                product_type: order.product_type,
+              },
+              targetPrice: raw.attached_target_price,
+              stopLossPrice: raw.attached_stop_loss_price,
+            });
+          }
+        } catch (e) {
+          console.warn('[Attached exits handling error]', e);
+        }
       } else {
         results.push({ orderId: order.id, status: 'OPEN', reason: fillRes.reason });
       }

@@ -83,6 +83,8 @@ jobs:
           npx tsx lib/kite-oauth-concurrency.test.ts
           npx tsx lib/paper-limit-order-lifecycle.test.ts
           npx tsx lib/api-stream-recovery.test.ts
+          npx tsx lib/telegram-security.test.ts
+          npx tsx lib/paper-account-ledger.test.ts
 
       - name: Build Next.js Production Bundle
         run: npm run build

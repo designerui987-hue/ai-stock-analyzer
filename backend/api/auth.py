@@ -26,13 +26,29 @@ class TokenResponse(BaseModel):
 
 @router.post("/register", response_model=TokenResponse)
 async def register(request: RegisterRequest, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == request.email).first()
+    clean_username = request.username.strip()
+    if not clean_username:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Display name cannot be empty.",
+        )
+    if len(request.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be at least 8 characters long.",
+        )
+
+    clean_email = str(request.email).strip().lower()
+    existing = db.query(User).filter(User.email == clean_email).first()
     if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this email address already exists. Please log in or use a different email.",
+        )
 
     user = User(
-        email=request.email,
-        username=request.username,
+        email=clean_email,
+        username=clean_username,
         password_hash=hash_password(request.password),
     )
     db.add(user)
@@ -45,7 +61,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == request.email).first()
+    clean_email = str(request.email).strip().lower()
+    user = db.query(User).filter(User.email == clean_email).first()
     if not user or not verify_password(request.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 

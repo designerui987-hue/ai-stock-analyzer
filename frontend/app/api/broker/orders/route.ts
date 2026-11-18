@@ -12,8 +12,11 @@ import {
   evaluateNseSession,
   validateQuoteForOrder,
   simulatePaperExecution,
+  spawnAttachedExitOrders,
+  calculateIndianEquityFees,
   ServerQuotePayload,
 } from '@/lib/orders/execution';
+import { getPaperAccountState } from '@/lib/orders/paper-account';
 import { z } from 'zod';
 
 const OrderPostSchema = z.object({
@@ -122,8 +125,9 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  let userId = '';
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
 
     const rawBody = await req.json();
     const parseResult = OrderPostSchema.safeParse(rawBody);
@@ -264,6 +268,40 @@ export async function POST(req: Request) {
 
     // 6. Paper Trading Simulation Path (strictly isolated ledger)
     if (mode === 'PAPER') {
+      // 6a. Virtual Account Buying Power and Holding Inventory Checks
+      const paperAccount = await getPaperAccountState(prisma, userId);
+      const evalPrice = limit_price ?? currentPrice;
+      const notional = evalPrice * quantity;
+      const estFees = calculateIndianEquityFees(notional, transaction_type, product_type || 'CNC').total_fees;
+
+      if (transaction_type === 'BUY') {
+        const requiredCash = notional + estFees;
+        if (requiredCash > paperAccount.available_cash) {
+          return NextResponse.json(
+            {
+              success: false,
+              mode: 'PAPER',
+              error: `Insufficient virtual cash balance. Required: ₹${requiredCash.toFixed(2)}, Available: ₹${paperAccount.available_cash.toFixed(2)}.`,
+            },
+            { status: 422 }
+          );
+        }
+      } else if (transaction_type === 'SELL' && (product_type === 'CNC' || !product_type)) {
+        // Enforce delivery holdings to prevent unsupported delivery short selling
+        const ownedHolding = paperAccount.positions[sym];
+        const availableQty = ownedHolding?.available_quantity || 0;
+        if (quantity > availableQty) {
+          return NextResponse.json(
+            {
+              success: false,
+              mode: 'PAPER',
+              error: `Insufficient delivery holdings to sell. Owned: ${ownedHolding?.quantity || 0}, Reserved: ${ownedHolding?.reserved_quantity || 0}, Available: ${availableQty}, Attempted: ${quantity}. Delivery short selling is not permitted.`,
+            },
+            { status: 422 }
+          );
+        }
+      }
+
       const sim = simulatePaperExecution({
         transaction_type,
         order_type,
@@ -312,39 +350,86 @@ export async function POST(req: Request) {
         );
       }
 
-      const paperOrder = await prisma.orderLog.create({
-        data: {
-          user_id: userId,
-          broker: 'PAPER',
-          mode: 'PAPER',
-          exchange: exch,
-          symbol: sym,
-          transaction_type,
-          quantity,
-          order_type,
-          price: sim.execution_price ?? limit_price ?? currentPrice,
-          trigger_price: trigger_price ?? null,
-          product_type,
-          source: signal_id || 'PAPER_SIMULATION',
-          broker_order_id: `PAPER_${Date.now()}`,
-          idempotency_key: idempotencyKey,
-          quote_as_of: quoteCheck.asOf || null,
-          slippage_bps: sim.slippage_bps,
-          fees_inr: sim.fees_inr,
-          status: sim.status,
-          response_raw: JSON.stringify({
+      let paperOrder: any;
+      try {
+        paperOrder = await prisma.orderLog.create({
+          data: {
+            user_id: userId,
+            broker: 'PAPER',
             mode: 'PAPER',
-            market_session: sessionInfo.session,
-            quote_source: quoteCheck.source,
-            quote_as_of: quoteCheck.asOf,
-            fill_price: sim.execution_price,
+            exchange: exch,
+            symbol: sym,
+            transaction_type,
+            quantity,
+            order_type,
+            price: sim.execution_price ?? limit_price ?? currentPrice,
+            trigger_price: trigger_price ?? null,
+            product_type,
+            source: signal_id || 'PAPER_SIMULATION',
+            broker_order_id: `PAPER_${Date.now()}`,
+            idempotency_key: idempotencyKey,
+            quote_as_of: quoteCheck.asOf || null,
             slippage_bps: sim.slippage_bps,
             fees_inr: sim.fees_inr,
-            fee_breakdown: sim.fee_breakdown || null,
-            reason: sim.reason,
-          }),
-        },
-      });
+            status: sim.status,
+            response_raw: JSON.stringify({
+              mode: 'PAPER',
+              market_session: sessionInfo.session,
+              quote_source: quoteCheck.source,
+              quote_as_of: quoteCheck.asOf,
+              fill_price: sim.execution_price,
+              slippage_bps: sim.slippage_bps,
+              fees_inr: sim.fees_inr,
+              fee_breakdown: sim.fee_breakdown || null,
+              attached_target_price: target_price || null,
+              attached_stop_loss_price: stop_loss_price || null,
+              reason: sim.reason,
+            }),
+          },
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002' && idempotencyKey) {
+          const existing = await prisma.orderLog.findFirst({
+            where: { user_id: userId, idempotency_key: idempotencyKey },
+          });
+          if (existing) {
+            const matches = (
+              existing.symbol === sym &&
+              existing.transaction_type === transaction_type &&
+              existing.quantity === quantity &&
+              existing.order_type === order_type
+            );
+            if (!matches) {
+              return NextResponse.json(
+                { success: false, error: 'Idempotency key was reused with conflicting order parameters.' },
+                { status: 409 }
+              );
+            }
+            return NextResponse.json({
+              success: existing.status !== 'REJECTED',
+              deduplicated: true,
+              mode: existing.mode || mode,
+              message: 'Duplicate submission deduplicated via Idempotency-Key.',
+              order: existing,
+            });
+          }
+        }
+        throw err;
+      }
+
+      // If paper order filled immediately and has attached exits, spawn resting child orders
+      if (paperOrder.status === 'FILLED' && (target_price || stop_loss_price)) {
+        try {
+          await spawnAttachedExitOrders(prisma, {
+            userId,
+            parentOrder: paperOrder,
+            targetPrice: target_price,
+            stopLossPrice: stop_loss_price,
+          });
+        } catch (e) {
+          console.warn('[Attached exit spawn error]', e);
+        }
+      }
 
       return NextResponse.json({
         success: true,
@@ -562,6 +647,23 @@ export async function POST(req: Request) {
   } catch (err: any) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
+    }
+    if (err?.code === 'P2002') {
+      const headerIdemKey = req.headers.get('idempotency-key') || req.headers.get('x-idempotency-key');
+      if (headerIdemKey) {
+        const existing = await prisma.orderLog.findFirst({
+          where: { user_id: userId, idempotency_key: headerIdemKey.trim() },
+        });
+        if (existing) {
+          return NextResponse.json({
+            success: existing.status !== 'REJECTED',
+            deduplicated: true,
+            mode: existing.mode,
+            message: 'Duplicate submission deduplicated via Idempotency-Key.',
+            order: existing,
+          });
+        }
+      }
     }
     console.error('Order placement error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

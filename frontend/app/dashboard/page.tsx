@@ -525,8 +525,10 @@ export default function DashboardPage() {
                 <span className="text-2xl font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
                   {hasPortfolioData
                     ? `₹${Number(portfolio.current_value).toLocaleString('en-IN')}`
+                    : portfolio && Array.isArray(portfolio.holdings) && portfolio.holdings.length > 0
+                    ? 'Valuation unavailable (awaiting live feed)'
                     : isAuthenticated
-                    ? 'No live broker portfolio holdings'
+                    ? 'No portfolio holdings recorded'
                     : 'Sign in to view account'}
                 </span>
                 {hasPortfolioData && typeof portfolio.total_pnl === 'number' && (

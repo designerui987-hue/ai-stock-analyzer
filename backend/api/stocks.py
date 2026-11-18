@@ -322,10 +322,30 @@ async def get_stock_analysis(
         }
     else:
         stock_data["technicals"] = tech
-        stock_data["ai_prediction"] = prediction_engine.analyze(clean, tech)
-        stock_data["ai_prediction"]["source"] = stock_data.get("source")
-        stock_data["ai_prediction"]["as_of"] = stock_data.get("as_of")
-        stock_data["ai_prediction"]["freshness"] = stock_data.get("freshness")
+        pred = prediction_engine.analyze(clean, tech)
+        pred["source"] = stock_data.get("source")
+        pred["as_of"] = stock_data.get("as_of")
+        pred["freshness"] = stock_data.get("freshness")
+        pred["entry_price"] = stock_data["price"]
+        pred["exit_price"] = pred.get("target_price")
+        pred["explanation"] = pred.get("rationale")
+        stock_data["ai_prediction"] = pred
+
+    # Expose quote object and aliases for UI reconciliation
+    stock_data["quote"] = {
+        "symbol": clean,
+        "name": stock_data.get("name"),
+        "price": stock_data.get("price"),
+        "change": stock_data.get("change"),
+        "change_percent": stock_data.get("change_percent"),
+        "change_pct": stock_data.get("change_percent"),
+        "source": stock_data.get("source"),
+        "freshness": stock_data.get("freshness"),
+        "as_of": stock_data.get("as_of"),
+        "exchange_timestamp": stock_data.get("exchange_timestamp"),
+    }
+    stock_data["ai_analysis"] = stock_data.get("ai_prediction")
+    stock_data["technical"] = stock_data.get("technicals")
 
     return stock_data
 

@@ -4,8 +4,25 @@ import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
 import { z } from 'zod';
 
 const AddWatchlistSchema = z.object({
-  symbol: z.string().min(1).max(30).transform((s) => s.toUpperCase().trim()),
-  exchange: z.string().default('NSE').transform((s) => s.toUpperCase().trim()),
+  symbol: z
+    .string()
+    .transform((s) => s.trim().toUpperCase())
+    .pipe(
+      z
+        .string()
+        .min(1, 'Stock symbol cannot be empty.')
+        .max(20, 'Stock symbol must be 20 characters or fewer.')
+        .regex(/^[A-Z0-9.\-&]+$/, 'Symbol must contain only valid alphanumeric characters, dots, ampersands, or hyphens.')
+    ),
+  exchange: z
+    .string()
+    .default('NSE')
+    .transform((s) => s.trim().toUpperCase())
+    .pipe(
+      z.enum(['NSE', 'BSE'] as const, {
+        message: "Unsupported exchange. Only 'NSE' and 'BSE' are supported.",
+      })
+    ),
   notes: z.string().max(255).optional(),
 });
 

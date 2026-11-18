@@ -67,9 +67,17 @@ class PaperOrderWorker:
         self.url = url
         self.secret = secret
         self.watches: dict[str, OrderWatch] = {}
+        self.retry_queue: asyncio.Queue[tuple[str, dict, int]] = asyncio.Queue(maxsize=1000)
+        self.evaluator_healthy: bool = True
+        self.last_evaluator_error: str | None = None
+
+    @property
+    def pending_retries(self) -> int:
+        return self.retry_queue.qsize()
 
     async def run(self) -> None:
         async with httpx.AsyncClient(timeout=3.0, follow_redirects=False, trust_env=False) as client:
+            retry_task = asyncio.create_task(self.drain_retries(client))
             try:
                 while True:
                     try:
@@ -79,6 +87,8 @@ class PaperOrderWorker:
                         logger.warning("Paper order subscription refresh failed (%s).", type(exc).__name__)
                     await asyncio.sleep(REFRESH_SECONDS)
             finally:
+                retry_task.cancel()
+                await asyncio.gather(retry_task, return_exceptions=True)
                 for user_id in list(self.watches):
                     await self.stop_watch(user_id)
 
@@ -144,6 +154,7 @@ class PaperOrderWorker:
 
     async def forward_quote(self, client: httpx.AsyncClient, user_id: str, payload: dict) -> None:
         token = create_access_token(user_id, timedelta(minutes=1))
+        last_error = None
         for attempt in range(2):
             try:
                 response = await client.post(
@@ -155,13 +166,61 @@ class PaperOrderWorker:
                     },
                 )
                 response.raise_for_status()
+                self.evaluator_healthy = True
+                self.last_evaluator_error = None
                 return
             except httpx.HTTPStatusError as exc:
+                last_error = f"HTTP {exc.response.status_code}"
                 if exc.response.status_code < 500:
                     logger.warning("Paper order quote rejected (HTTP %s).", exc.response.status_code)
                     return
-            except httpx.RequestError:
-                pass
+            except httpx.RequestError as exc:
+                last_error = f"RequestError: {type(exc).__name__}"
             if attempt == 0:
                 await asyncio.sleep(0.25)
-        logger.warning("The paper order evaluator did not acknowledge a quote.")
+
+        self.evaluator_healthy = False
+        self.last_evaluator_error = f"Evaluator unacknowledged: {last_error}"
+        logger.warning("The paper order evaluator did not acknowledge a quote (%s). Queuing for recovery.", last_error)
+        try:
+            self.retry_queue.put_nowait((user_id, payload, 0))
+        except asyncio.QueueFull:
+            logger.warning("Paper order worker retry queue is full (1000 items). Oldest dropped.")
+
+    async def drain_retries(self, client: httpx.AsyncClient) -> None:
+        """Background worker draining unacknowledged quotes when the evaluator recovers."""
+        while True:
+            try:
+                user_id, payload, attempts = await self.retry_queue.get()
+                token = create_access_token(user_id, timedelta(minutes=1))
+                try:
+                    response = await client.post(
+                        self.url,
+                        json=payload,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "X-Cron-Secret": self.secret,
+                        },
+                    )
+                    response.raise_for_status()
+                    self.evaluator_healthy = True
+                    self.last_evaluator_error = None
+                    self.retry_queue.task_done()
+                except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                    self.evaluator_healthy = False
+                    self.last_evaluator_error = f"Recovery attempt failed: {exc}"
+                    self.retry_queue.task_done()
+                    if attempts < 8:
+                        delay = min(10.0, 0.5 * (2 ** attempts))
+                        await asyncio.sleep(delay)
+                        try:
+                            self.retry_queue.put_nowait((user_id, payload, attempts + 1))
+                        except asyncio.QueueFull:
+                            pass
+                    else:
+                        logger.warning("Dropped quote for %s after %d retries.", payload.get("symbol"), attempts)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("Unexpected error in paper order retry drain: %s", exc)
+                await asyncio.sleep(1.0)

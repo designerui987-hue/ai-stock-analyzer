@@ -18,17 +18,19 @@ export interface TelegramMessagePayload {
 export async function sendTelegramAlert(
   chatId: string | null,
   payload: TelegramMessagePayload
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; status?: 'sent' | 'failed' | 'unavailable'; error?: string }> {
   if (!chatId) {
-    return { success: false, error: 'Telegram account not linked (chat_id missing)' };
+    return { success: false, status: 'unavailable', error: 'Telegram account not linked (chat_id missing)' };
   }
 
   const token = process.env.TELEGRAM_BOT_TOKEN;
 
   if (!token) {
-    // Simulated delivery for development/demo mode
-    console.log(`[Telegram Mock Send to Chat ${chatId}]:`, payload.text);
-    return { success: true };
+    return {
+      success: false,
+      status: 'unavailable',
+      error: 'TELEGRAM_BOT_TOKEN not configured on server.',
+    };
   }
 
   try {

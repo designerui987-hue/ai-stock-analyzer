@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
 import { 
   Target, Activity, TrendingUp, TrendingDown, ChevronDown, ChevronUp, AlertCircle, ShieldAlert
 } from 'lucide-react';
@@ -13,6 +14,7 @@ import {
 export default function PerformanceLedger() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   // Filters
@@ -22,6 +24,7 @@ export default function PerformanceLedger() {
 
   const fetchLedger = async () => {
     setLoading(true);
+    setError(null);
     try {
       const params = new URLSearchParams();
       if (symbol) params.append('symbol', symbol);
@@ -29,12 +32,18 @@ export default function PerformanceLedger() {
       if (minConf) params.append('min_confidence', minConf);
 
       const res = await fetch(`/api/signals/ledger?${params.toString()}`);
+      if (!res.ok) {
+        throw new Error(`Failed to load signal performance ledger (HTTP ${res.status}).`);
+      }
       const json = await res.json();
       if (json.success) {
         setData(json);
+      } else {
+        throw new Error(json.error || 'Failed to load signal performance ledger.');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Signal ledger fetch error:', err);
+      setError(err?.message || 'Signal performance ledger could not be loaded.');
     } finally {
       setLoading(false);
     }
@@ -55,6 +64,23 @@ export default function PerformanceLedger() {
     return (
       <div className="max-w-7xl mx-auto flex items-center justify-center h-[50vh]">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in p-8 text-center">
+        <Card className="p-8 max-w-lg mx-auto space-y-4">
+          <AlertCircle className="w-10 h-10 text-red-500 mx-auto" />
+          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+            Could Not Load Performance Ledger
+          </h3>
+          <p className="text-xs text-slate-500">{error}</p>
+          <Button variant="primary" size="sm" onClick={fetchLedger}>
+            Retry Loading
+          </Button>
+        </Card>
       </div>
     );
   }

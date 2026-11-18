@@ -13,23 +13,35 @@ export default function InsightsPage() {
 
   if (!isDemoMode) {
     return (
-      <div className="max-w-4xl mx-auto space-y-6 py-8">
+      <div className="max-w-4xl mx-auto space-y-6 py-8 animate-fade-in">
         <div>
           <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-            Market Insights
+            Market Insights &amp; Quantitative Signals
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Automated intelligence feed is unavailable. Static demo insights are disabled (`DEMO_MODE=false`).
+            Deterministic technical consensus and automated pattern recognition.
           </p>
         </div>
-        <Card className="p-6 space-y-3 border-amber-500/30">
-          <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-semibold text-sm">
-            <AlertTriangle className="w-4 h-4" />
-            <span>Insights Feed Unavailable</span>
+        <Card className="p-8 space-y-4 border-slate-200 dark:border-white/[0.08]">
+          <div className="flex items-center space-x-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm">
+            <Sparkles className="w-5 h-5" />
+            <span>Deterministic Research Stream</span>
           </div>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            No fabricated AI insight telemetry or placeholder confidence numbers are displayed in live mode. Use individual stock analysis pages or Data Sources for verified real-world data.
+          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+            In accordance with our strict accuracy policy, synthetic insights or invented confidence scores are never shown with placeholder fixtures. To view verified quantitative signals with auditable track records, visit the Signal Performance Ledger or individual stock analysis pages.
           </p>
+          <div className="pt-3 flex flex-wrap gap-3">
+            <Link href="/performance">
+              <Button variant="primary" size="sm">
+                View Performance Ledger →
+              </Button>
+            </Link>
+            <Link href="/stocks">
+              <Button variant="outline" size="sm">
+                Explore NSE Stock Universe
+              </Button>
+            </Link>
+          </div>
         </Card>
       </div>
     );

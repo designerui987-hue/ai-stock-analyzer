@@ -27,6 +27,7 @@ export default function WatchlistPage() {
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [watchlistStocks, setWatchlistStocks] = useState<WatchlistStock[]>([]);
 
   const loadWatchlist = async () => {
@@ -93,17 +94,25 @@ export default function WatchlistPage() {
   const handleAddSymbol = async (e: React.FormEvent) => {
     e.preventDefault();
     const sym = newSymbol.trim().toUpperCase();
-    if (!sym) return;
+    if (!sym) {
+      setModalError('Please enter a valid stock symbol.');
+      return;
+    }
+
+    if (!/^[A-Z0-9.\-&]{1,20}$/.test(sym)) {
+      setModalError('Invalid symbol: must be 1-20 alphanumeric characters, dots, or hyphens.');
+      return;
+    }
 
     setIsAdding(true);
-    setError(null);
+    setModalError(null);
     try {
       await api.addToWatchlist(sym, 'NSE');
       setNewSymbol('');
       setShowAddModal(false);
       await loadWatchlist();
     } catch (err: any) {
-      setError(err?.message || 'Failed to add symbol to watchlist.');
+      setModalError(err?.message || 'Failed to add symbol to watchlist.');
     } finally {
       setIsAdding(false);
     }

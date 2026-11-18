@@ -5,7 +5,10 @@ import { z } from 'zod';
 
 const PreferencesPostSchema = z.object({
   channels_enabled: z.record(z.string(), z.boolean()).optional(),
-  alert_types_subscribed: z.array(z.string()).optional(),
+  alert_types_subscribed: z.union([
+    z.record(z.string(), z.boolean()),
+    z.array(z.string()),
+  ]).optional(),
   quiet_hours: z.object({
     enabled: z.boolean(),
     start: z.string(),
@@ -15,6 +18,35 @@ const PreferencesPostSchema = z.object({
   whatsapp_number: z.string().max(20).nullable().optional(),
   telegram_chat_id: z.string().max(50).nullable().optional(),
 });
+
+function parseAlertTypes(raw: string | null | undefined): Record<string, boolean> {
+  const defaults: Record<string, boolean> = {
+    new_signal: true,
+    target_hit: true,
+    sl_hit: true,
+    breakout: true,
+    risk_warning: true,
+    watchlist_move: false,
+  };
+
+  if (!raw) return defaults;
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) {
+      const result: Record<string, boolean> = {};
+      for (const k of Object.keys(defaults)) {
+        result[k] = parsed.includes(k);
+      }
+      return result;
+    }
+    if (parsed && typeof parsed === 'object') {
+      return { ...defaults, ...parsed };
+    }
+  } catch {
+    // fallback to defaults
+  }
+  return defaults;
+}
 
 export async function GET(req: Request) {
   try {
@@ -35,7 +67,7 @@ export async function GET(req: Request) {
       preference: {
         ...pref,
         channels_enabled: JSON.parse(pref.channels_enabled),
-        alert_types_subscribed: JSON.parse(pref.alert_types_subscribed),
+        alert_types_subscribed: parseAlertTypes(pref.alert_types_subscribed),
         quiet_hours: JSON.parse(pref.quiet_hours),
       },
     });
@@ -73,7 +105,14 @@ export async function POST(req: Request) {
 
     const data: any = {};
     if (channels_enabled !== undefined) data.channels_enabled = JSON.stringify(channels_enabled);
-    if (alert_types_subscribed !== undefined) data.alert_types_subscribed = JSON.stringify(alert_types_subscribed);
+    if (alert_types_subscribed !== undefined) {
+      const normalized = parseAlertTypes(
+        typeof alert_types_subscribed === 'object'
+          ? JSON.stringify(alert_types_subscribed)
+          : alert_types_subscribed
+      );
+      data.alert_types_subscribed = JSON.stringify(normalized);
+    }
     if (quiet_hours !== undefined) data.quiet_hours = JSON.stringify(quiet_hours);
     if (min_confidence_threshold !== undefined) data.min_confidence_threshold = min_confidence_threshold;
     if (whatsapp_number !== undefined) data.whatsapp_number = whatsapp_number;
@@ -90,7 +129,7 @@ export async function POST(req: Request) {
       preference: {
         ...pref,
         channels_enabled: JSON.parse(pref.channels_enabled),
-        alert_types_subscribed: JSON.parse(pref.alert_types_subscribed),
+        alert_types_subscribed: parseAlertTypes(pref.alert_types_subscribed),
         quiet_hours: JSON.parse(pref.quiet_hours),
       },
     });

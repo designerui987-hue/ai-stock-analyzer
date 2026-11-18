@@ -4,6 +4,7 @@ from enum import Enum
 
 
 class AlertType(str, Enum):
+    BUY_SIGNAL = "buy_signal"
     BUY_OPPORTUNITY = "buy_opportunity"
     SELL_SIGNAL = "sell_signal"
     BREAKOUT = "breakout"

@@ -93,6 +93,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command Palette and Search"
         className="w-full max-w-xl bg-white dark:bg-[#121826] border border-slate-200 dark:border-white/[0.08] rounded-card-lg shadow-elevation dark:shadow-dark-elevation overflow-hidden animate-scale-in"
         onClick={(e) => e.stopPropagation()}
       >

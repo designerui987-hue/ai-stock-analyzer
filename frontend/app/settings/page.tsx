@@ -50,6 +50,9 @@ export default function SettingsPage() {
   const [whatsappPhone, setWhatsappPhone] = useState('+91');
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [waVerificationSent, setWaVerificationSent] = useState(false);
+  const [waSaveStatus, setWaSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [linkingTelegram, setLinkingTelegram] = useState(false);
+  const [telegramError, setTelegramError] = useState<string | null>(null);
 
   // Broker Connection State
   const [brokerConn, setBrokerConn] = useState<{ connected: boolean; status: string; expires_at?: string }>({
@@ -58,6 +61,23 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
+    // Restore risk settings from account-scoped or local storage
+    try {
+      const user = auth.getUser();
+      const userKey = user?.id ? `stockai_risk_settings_${user.id}` : null;
+      const savedRisk = (userKey ? localStorage.getItem(userKey) : null) || localStorage.getItem('stockai_risk_settings');
+      if (savedRisk) {
+        const parsed = JSON.parse(savedRisk);
+        setSettings((prev) => ({
+          ...prev,
+          accountCapital: typeof parsed.accountCapital === 'number' ? parsed.accountCapital : prev.accountCapital,
+          riskPerTradePct: typeof parsed.riskPerTradePct === 'number' ? parsed.riskPerTradePct : prev.riskPerTradePct,
+          maxConcentrationPct: typeof parsed.maxConcentrationPct === 'number' ? parsed.maxConcentrationPct : prev.maxConcentrationPct,
+          maxOpenPositions: typeof parsed.maxOpenPositions === 'number' ? parsed.maxOpenPositions : prev.maxOpenPositions,
+        }));
+      }
+    } catch {}
+
     // Fetch broker connection status
     fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
       .then((res) => res.json())
@@ -102,14 +122,66 @@ export default function SettingsPage() {
     alert('Web Push gateway is currently disabled in staging. Service worker push registration requires production VAPID infrastructure.');
   };
 
+  const handleConnectTelegram = async () => {
+    setLinkingTelegram(true);
+    setTelegramError(null);
+    try {
+      const res = await fetch('/api/telegram/link-token', {
+        headers: auth.getAuthHeaders(),
+      });
+      const data = await res.json();
+      if (data.success && data.deep_link) {
+        window.open(data.deep_link, '_blank');
+      } else {
+        setTelegramError(data.error || 'Failed to generate link token');
+      }
+    } catch {
+      setTelegramError('Unable to reach link token service');
+    } finally {
+      setLinkingTelegram(false);
+    }
+  };
+
+  const handleSaveWhatsApp = async () => {
+    if (!whatsappPhone.trim() || whatsappPhone.trim() === '+91') {
+      alert('Please enter a valid phone number (e.g. +91 9876543210).');
+      return;
+    }
+    setWaSaveStatus('saving');
+    try {
+      const res = await fetch('/api/alerts/preferences', {
+        method: 'POST',
+        headers: auth.getAuthHeaders(),
+        body: JSON.stringify({
+          whatsapp_number: whatsappPhone.trim(),
+          channels_enabled: { ...channels, whatsapp: true },
+        }),
+      });
+      if (res.ok) {
+        setChannels((prev) => ({ ...prev, whatsapp: true }));
+        setWaSaveStatus('saved');
+        setTimeout(() => setWaSaveStatus('idle'), 3000);
+      } else {
+        setWaSaveStatus('error');
+      }
+    } catch {
+      setWaSaveStatus('error');
+    }
+  };
+
   const handleSave = async () => {
+    const user = auth.getUser();
     if (typeof window !== 'undefined') {
-      localStorage.setItem('stockai_risk_settings', JSON.stringify({
+      const riskPayload = JSON.stringify({
         accountCapital: settings.accountCapital,
         riskPerTradePct: settings.riskPerTradePct,
         maxConcentrationPct: settings.maxConcentrationPct,
         maxOpenPositions: settings.maxOpenPositions,
-      }));
+      });
+      localStorage.setItem('stockai_risk_settings', riskPayload);
+      if (user?.id) {
+        localStorage.setItem(`stockai_risk_settings_${user.id}`, riskPayload);
+      }
     }
 
     try {
@@ -356,14 +428,21 @@ export default function SettingsPage() {
                 Connected Chat ID: {telegramChatId}
               </div>
             ) : (
-              <a
-                href="https://t.me/StockAIBot"
-                target="_blank"
-                rel="noreferrer"
-                className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold transition-colors"
-              >
-                <QrCode className="w-3.5 h-3.5" /> Connect Telegram Bot <ExternalLink className="w-3 h-3" />
-              </a>
+              <div className="space-y-1.5">
+                <button
+                  type="button"
+                  onClick={handleConnectTelegram}
+                  disabled={linkingTelegram}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-xs font-semibold transition-colors"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  {linkingTelegram ? 'Generating Link…' : 'Connect Telegram Bot'}
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+                {telegramError && (
+                  <p className="text-[11px] text-red-500 text-center font-medium">{telegramError}</p>
+                )}
+              </div>
             )}
           </div>
 
@@ -394,13 +473,17 @@ export default function SettingsPage() {
               />
               <button
                 type="button"
-                onClick={() => {
-                  setWaVerificationSent(true);
-                  setTimeout(() => setWaVerificationSent(false), 3000);
-                }}
-                className="w-full py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-semibold transition-colors"
+                onClick={handleSaveWhatsApp}
+                disabled={waSaveStatus === 'saving'}
+                className="w-full py-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded text-xs font-semibold transition-colors"
               >
-                {waVerificationSent ? 'Verification Code Sent!' : 'Save Phone Number'}
+                {waSaveStatus === 'saving'
+                  ? 'Saving…'
+                  : waSaveStatus === 'saved'
+                  ? '✓ Phone Number Saved!'
+                  : waSaveStatus === 'error'
+                  ? 'Save Failed. Try Again'
+                  : 'Save Phone Number'}
               </button>
             </div>
           </div>

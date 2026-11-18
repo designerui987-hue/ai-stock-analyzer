@@ -20,6 +20,7 @@ import {
   ChevronUp,
   ArrowUp,
   ArrowDown,
+  ArrowUpRight,
   ShoppingBag,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
@@ -41,8 +42,8 @@ import { ModelVote } from '@/lib/explainability/factorMapping';
  * fake XGBoost/LightGBM/Neural Net/Prophet scores (removed per AGENTS.md).
  * Rule-based factors from the deterministic engine are shown directly.
  */
-function adaptBackendAIToFrontend(backendAI: any, technicals?: any) {
-  if (!backendAI) return null;
+function adaptBackendAIToFrontend(backendAIInput: any, technicals?: any) {
+  const backendAI = backendAIInput || { status: 'unavailable', reason: 'Quantitative models loading or unavailable' };
 
   // RSI/MACD may be numbers OR {status:'unavailable'} objects from the backend
   const rsiRaw = backendAI.rsi ?? technicals?.rsi;
@@ -50,22 +51,32 @@ function adaptBackendAIToFrontend(backendAI: any, technicals?: any) {
   const rsiDisplay: number | null = typeof rsiRaw === 'number' ? rsiRaw : null;
   const macdDisplay: number | null = typeof macdRaw === 'number' ? macdRaw : null;
 
+  const isUnavailable = backendAI.status === 'unavailable';
+  const entry = backendAI.entry_price ?? backendAI.entry ?? technicals?.price ?? null;
+  const target = backendAI.target_price ?? backendAI.exit_price ?? backendAI.target ?? null;
+  const stopLoss = backendAI.stop_loss ?? backendAI.stop_loss_price ?? backendAI.stopLoss ?? null;
+  const reasons = ([backendAI.rationale, backendAI.explanation, ...(backendAI.factors || [])].filter(Boolean)) as string[];
+
   return {
-    signal: (backendAI.signal ?? 'HOLD') as string,
-    confidence: (backendAI.confidence ?? 50) as number,
+    is_unavailable: isUnavailable,
+    status: backendAI.status,
+    reason: backendAI.reason,
+    rule_version: backendAI.rule_version || 'tech_consensus_v1',
+    signal: (backendAI.signal ?? (isUnavailable ? 'UNAVAILABLE' : 'HOLD')) as string,
+    confidence: (typeof backendAI.confidence === 'number' ? backendAI.confidence : (isUnavailable ? 0 : 50)) as number,
     risk: ((backendAI.risk_score ?? 5) < 4 ? 'Low' : (backendAI.risk_score ?? 5) < 7 ? 'Medium' : 'High') as string,
     riskScore: (backendAI.risk_score ?? 5) as number,
-    entry: (backendAI.entry_price ?? 0) as number,
-    target: (backendAI.exit_price ?? 0) as number,
-    stopLoss: (backendAI.stop_loss ?? 0) as number,
+    entry: (entry ?? 0) as number,
+    target: (target ?? 0) as number,
+    stopLoss: (stopLoss ?? 0) as number,
     upside: (backendAI.profit_probability ?? 50) as number,
     profitProb: (backendAI.profit_probability ?? 50) as number,
-    reasons: ([backendAI.explanation, ...(backendAI.factors || [])].filter(Boolean)) as string[],
+    reasons: reasons.length > 0 ? reasons : (isUnavailable ? [backendAI.reason || 'Quantitative models unavailable'] : []),
     pe: (typeof backendAI.pe_ratio === 'number' ? backendAI.pe_ratio : null) as number | null,
     rsi: rsiDisplay,
     macd: macdDisplay,
-    analysis_mode: (backendAI.analysis_mode ?? 'unknown') as string,
-    // No model_votes — fake XGBoost/LightGBM/Neural Net/Prophet breakdown removed
+    analysis_mode: (backendAI.analysis_mode ?? 'deterministic_quant') as string,
+    // No model_votes — fake XGBoost/LightGBM/Neural Net/Prophet breakdown removed per AGENTS.md
     model_votes: [] as ModelVote[],
     consensus_summary: null as string | null,
   };
@@ -113,19 +124,38 @@ export default function StockAnalysisPage() {
       // Fetch Initial Chart Data
       fetchChartForRange('1M');
 
-      // Subscribe to real-time price stream via SSE
-      unsubscribeStream = api.subscribePriceStream([symbol], (event) => {
-        if (event?.quotes && Array.isArray(event.quotes)) {
-          const match = event.quotes.find((q: any) => q.symbol === symbol);
-          if (match && typeof match.price === 'number' && match.price > 0) {
-            setLiveStock((prev: any) => {
-              if (!prev) return { quote: match };
-              return {
-                ...prev,
-                quote: { ...(prev.quote || {}), ...match },
-              };
-            });
-          }
+      // Subscribe to real-time price stream via SSE (supports both symbol-keyed and array payloads)
+      unsubscribeStream = api.subscribePriceStream([symbol], (payload: any) => {
+        if (!payload || typeof payload !== 'object') return;
+        const tick = payload[symbol] || (Array.isArray(payload?.quotes) ? payload.quotes.find((q: any) => q.symbol === symbol) : null);
+        if (tick && typeof tick.price === 'number' && tick.price > 0) {
+          setLiveStock((prev: any) => {
+            const nextPrice = Number(tick.price);
+            const nextChangePercent = typeof tick.change_percent === 'number' ? tick.change_percent : (typeof tick.change_pct === 'number' ? tick.change_pct : prev?.change_percent);
+            const nextAsOf = tick.as_of || new Date().toISOString();
+            const nextSource = tick.source || prev?.source || 'NSE Live';
+            const nextFreshness = tick.freshness || 'LIVE';
+            return {
+              ...(prev || {}),
+              price: nextPrice,
+              change_percent: nextChangePercent,
+              change_pct: nextChangePercent,
+              as_of: nextAsOf,
+              source: nextSource,
+              freshness: nextFreshness,
+              exchange_timestamp: tick.exchange_timestamp || nextAsOf,
+              quote: {
+                ...(prev?.quote || {}),
+                ...tick,
+                price: nextPrice,
+                change_percent: nextChangePercent,
+                change_pct: nextChangePercent,
+                as_of: nextAsOf,
+                source: nextSource,
+                freshness: nextFreshness,
+              },
+            };
+          });
         }
       });
     });
@@ -134,6 +164,24 @@ export default function StockAnalysisPage() {
       if (unsubscribeStream) unsubscribeStream();
     };
   }, [symbol]);
+
+  // Load account-specific risk settings if available
+  useEffect(() => {
+    try {
+      const user = auth.getUser();
+      const userSpecificKey = user?.id ? `stockai_risk_settings_${user.id}` : null;
+      const stored = (userSpecificKey ? localStorage.getItem(userSpecificKey) : null) || localStorage.getItem('stockai_risk_settings');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed.accountCapital === 'number' && parsed.accountCapital > 0) {
+          setCalcCapital(parsed.accountCapital);
+        }
+        if (typeof parsed.riskPerTradePct === 'number' && parsed.riskPerTradePct > 0) {
+          setCalcRiskPct(parsed.riskPerTradePct);
+        }
+      }
+    } catch {}
+  }, []);
 
   const handleToggleWatchlist = async () => {
     const nextState = !watchlisted;
@@ -167,8 +215,28 @@ export default function StockAnalysisPage() {
     });
   };
 
-  // Prefer live quote from backend or Next.js route; fall back to demo fixture only when DEMO_MODE is true
-  const resolvedQuote = liveStock?.quote?.price ? liveStock.quote : (liveStock?.live_quote?.price ? liveStock.live_quote : null);
+  // Reconcile live quote from top-level fields (FastAPI get_stock_analysis) or nested quote object
+  const hasLiveTopPrice = typeof liveStock?.price === 'number' && liveStock.price > 0 && liveStock.status !== 'unavailable';
+  const hasLiveNestedPrice = typeof liveStock?.quote?.price === 'number' && liveStock.quote.price > 0 && liveStock.quote.status !== 'unavailable';
+  const resolvedQuote = hasLiveTopPrice ? {
+    symbol,
+    name: liveStock.name || symbol,
+    sector: liveStock.sector || 'NSE Equity',
+    exchange: liveStock.exchange || 'NSE',
+    price: liveStock.price,
+    change: liveStock.change,
+    change_pct: liveStock.change_percent ?? liveStock.change_pct ?? 0,
+    open: liveStock.open,
+    high: liveStock.high,
+    low: liveStock.low,
+    volume: liveStock.volume,
+    market_cap: liveStock.market_cap || '—',
+    source: liveStock.source,
+    freshness: liveStock.freshness,
+    as_of: liveStock.as_of,
+    exchange_timestamp: liveStock.exchange_timestamp,
+  } : (hasLiveNestedPrice ? liveStock.quote : (liveStock?.live_quote?.price ? liveStock.live_quote : null));
+
   const fallbackBase = demoStock || { symbol, name: symbol, sector: 'NSE Equity', price: 0, change_pct: 0, market_cap: '—' };
   const stock = resolvedQuote ? { ...fallbackBase, ...resolvedQuote } : (isDemoAllowed && demoStock ? demoStock : { ...fallbackBase, price: 0, change_pct: 0, is_unavailable: true });
 
@@ -180,7 +248,12 @@ export default function StockAnalysisPage() {
   const sharpeVal = typeof riskData?.sharpe_ratio === 'number' ? riskData.sharpe_ratio.toFixed(2) : (riskData?.sharpe_ratio?.status === 'unavailable' ? 'Unavailable' : '—');
   const riskSource = riskData?.source || 'yfinance/^NSEI';
   const riskAsOf = riskData?.as_of ? new Date(riskData.as_of).toLocaleDateString('en-IN') : null;
-  const ai = (liveStock?.ai_analysis ? adaptBackendAIToFrontend(liveStock.ai_analysis, liveStock.technical) : null) || adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading AI Data...', factors: [], prediction_models: {} })!;
+
+  const aiRaw = liveStock?.ai_prediction || liveStock?.ai_analysis;
+  const techRaw = liveStock?.technicals || liveStock?.technical;
+  const ai = aiRaw ? adaptBackendAIToFrontend(aiRaw, techRaw) : (
+    liveStock ? adaptBackendAIToFrontend({ status: 'unavailable', reason: liveStock.reason || 'Quantitative models unavailable' }) : adaptBackendAIToFrontend({ signal: 'HOLD', confidence: 50, risk_score: 5, entry_price: stock.price, exit_price: stock.price, stop_loss: stock.price, profit_probability: 50, explanation: 'Loading Quantitative Analysis...', factors: [], prediction_models: {} })!
+  );
   
   const isUp = stock.change_pct >= 0;
 
@@ -240,6 +313,17 @@ export default function StockAnalysisPage() {
     setOrderSubmitting(true);
     setOrderError(null);
     setOrderSuccessMsg(null);
+
+    if (stock.is_unavailable || !stock.price || stock.price <= 0) {
+      setOrderError('Cannot submit order: Real-time market price for this stock is currently unavailable.');
+      setOrderSubmitting(false);
+      return;
+    }
+    if (ai.is_unavailable || ai.signal === 'UNAVAILABLE') {
+      setOrderError('Cannot submit order: Quantitative signal inputs are unavailable.');
+      setOrderSubmitting(false);
+      return;
+    }
 
     const parsedLimit = limitPriceInput ? Number(limitPriceInput) : ai.entry || stock.price;
     try {
@@ -584,12 +668,13 @@ export default function StockAnalysisPage() {
                     {ai.confidence}% Confidence
                   </Badge>
                 </div>
-                {/* Integrated Options Positioning Tag */}
+                {/* Link to Option Chain Analytics */}
                 <div className="mt-2 text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 px-2.5 py-1 rounded inline-flex items-center gap-1.5 border border-indigo-500/20">
                   <Layers className="w-3 h-3" />
-                  <span>
-                    Options positioning: {getOptionChainSummary(stock.symbol, stock.price).summary.pcr_signal} (PCR {getOptionChainSummary(stock.symbol, stock.price).summary.pcr}, Max Pain ₹{getOptionChainSummary(stock.symbol, stock.price).summary.max_pain})
-                  </span>
+                  <Link href={`/stocks/${stock.symbol}/options`} className="hover:underline flex items-center gap-1">
+                    <span>View Option Chain Analytics</span>
+                    <ArrowUpRight className="w-3 h-3" />
+                  </Link>
                 </div>
               </div>
 
@@ -992,7 +1077,16 @@ export default function StockAnalysisPage() {
                       variant="primary"
                       size="md"
                       onClick={handleExecuteOrder}
-                      disabled={orderSubmitting || Boolean(orderSuccessMsg) || (orderMode === 'LIVE' && (!liveOptIn || !confirmLiveTicket))}
+                      disabled={
+                        orderSubmitting ||
+                        Boolean(orderSuccessMsg) ||
+                        (orderMode === 'LIVE' && (!liveOptIn || !confirmLiveTicket)) ||
+                        Boolean(stock.is_unavailable) ||
+                        !stock.price ||
+                        stock.price <= 0 ||
+                        Boolean(ai.is_unavailable) ||
+                        ai.signal === 'UNAVAILABLE'
+                      }
                       className={ai.signal === 'BUY' ? '!bg-emerald-600 hover:!bg-emerald-700' : '!bg-red-600 hover:!bg-red-700'}
                     >
                       {orderSubmitting

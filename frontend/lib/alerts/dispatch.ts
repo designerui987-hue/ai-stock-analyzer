@@ -95,7 +95,11 @@ export function shouldSendAlert(
     const types = typeof pref.alert_types_subscribed === 'string'
       ? JSON.parse(pref.alert_types_subscribed)
       : pref.alert_types_subscribed;
-    if (types && types[alertType] === false) {
+    if (Array.isArray(types)) {
+      if (!types.includes(alertType)) {
+        return { send: false, reason: `Subscribed alert types disabled for ${alertType}` };
+      }
+    } else if (types && types[alertType] === false) {
       return { send: false, reason: `Subscribed alert types disabled for ${alertType}` };
     }
   } catch (e) {}
@@ -195,10 +199,12 @@ export async function sendAlert(
           body: messageText,
           url: `/stocks/${payload.symbol}`,
         });
-        if (!res.success) status = 'FAILED';
+        if (res.status === 'unavailable') status = 'UNAVAILABLE';
+        else if (!res.success) status = 'FAILED';
       } else if (channel === 'telegram') {
         const res = await sendTelegramAlert(pref.telegram_chat_id, { text: messageText });
-        if (!res.success) status = 'FAILED';
+        if (res.status === 'unavailable') status = 'UNAVAILABLE';
+        else if (!res.success) status = 'FAILED';
       } else if (channel === 'whatsapp') {
         const res = await sendWhatsAppAlert(pref.whatsapp_number, {
           phoneNumber: pref.whatsapp_number || '',
@@ -209,7 +215,8 @@ export async function sendAlert(
           stopLoss: payload.stop_loss_price?.toString() || '',
           confidence: payload.confidence_pct.toString(),
         });
-        if (!res.success) status = 'FAILED';
+        if (res.status === 'unavailable') status = 'UNAVAILABLE';
+        else if (!res.success) status = 'FAILED';
       }
 
       await prisma.alertLog.create({

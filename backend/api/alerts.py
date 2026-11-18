@@ -10,6 +10,7 @@ from auth.security import get_current_user
 from models.analysis import AlertType, AlertPriority
 from data.demo_stocks import NIFTY50_STOCKS
 from ai_models.prediction_engine import prediction_engine
+from config import settings
 
 router = APIRouter()
 
@@ -93,8 +94,9 @@ async def get_alerts(
     ).all()
 
     if not db_alerts:
-        # Return demo alerts for new users
-        return generate_demo_alerts()
+        if settings.demo_mode:
+            return generate_demo_alerts()
+        return []
 
     # Convert database alerts to API format
     alerts = []
@@ -121,10 +123,17 @@ async def unread_count(
     db: Session = Depends(get_db)
 ):
     """Get count of unread alerts."""
-    # For now, return demo count - in production this would track read status
-    alerts = generate_demo_alerts()
-    count = sum(1 for a in alerts if not a["read"])
-    return {"count": count}
+    unread = db.query(Alert).filter(
+        Alert.user_id == int(user_id),
+        Alert.is_active == True
+    ).count()
+
+    if unread == 0 and settings.demo_mode:
+        alerts = generate_demo_alerts()
+        count = sum(1 for a in alerts if not a["read"])
+        return {"count": count, "demo": True}
+
+    return {"count": unread}
 
 
 @router.get("/insights")

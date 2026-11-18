@@ -205,14 +205,25 @@ async function runPaperLimitLifecycleTests() {
         if (query?.where?.exchange && o.exchange !== query.where.exchange) return false;
         if (query?.where?.status && o.status !== query.where.status) return false;
         if (query?.where?.mode && o.mode && o.mode !== query.where.mode) return false;
-        if (query?.where?.order_type && o.order_type !== query.where.order_type) return false;
+        if (query?.where?.order_type) {
+          if (typeof query.where.order_type === 'object' && Array.isArray(query.where.order_type.in)) {
+            if (!query.where.order_type.in.includes(o.order_type)) return false;
+          } else if (o.order_type !== query.where.order_type) {
+            return false;
+          }
+        }
         return true;
       });
     }
 
-    async updateMany(query: { where: Record<string, string>; data: any }) {
+    async updateMany(query: { where: Record<string, any>; data: any }) {
       const order = this.orders.get(query.where.id);
-      if (!order || !Object.entries(query.where).every(([key, value]) => order[key] === value)) {
+      if (!order || !Object.entries(query.where).every(([key, value]) => {
+        if (value && typeof value === 'object' && Array.isArray((value as any).in)) {
+          return (value as any).in.includes(order[key]);
+        }
+        return order[key] === value;
+      })) {
         return { count: 0 };
       }
       order.status = query.data.status;

@@ -56,6 +56,21 @@ export const auth = {
     } catch {
       return false;
     }
+  },
+
+  getUser: (): { id: string; email?: string; username?: string } | null => {
+    const token = auth.getToken();
+    if (!token) return null;
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      return {
+        id: String(payload.sub),
+        email: payload.email || '',
+        username: payload.username || '',
+      };
+    } catch {
+      return null;
+    }
   }
 };
 
@@ -317,8 +332,17 @@ export const api = {
     };
   },
 
-  // Portfolio
+  // Portfolio (Authoritative database-backed holdings)
   getPortfolio: () => fetchAPI('/api/portfolio/'),
+  addHolding: (symbol: string, qty: number, avg_price: number, exchange = 'NSE') =>
+    fetchAPI('/api/portfolio/holdings', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, qty, avg_price, exchange }),
+    }),
+  removeHolding: (symbol: string, qty?: number) =>
+    fetchAPI(`/api/portfolio/holdings/${encodeURIComponent(symbol)}${qty ? `?qty=${qty}` : ''}`, {
+      method: 'DELETE',
+    }),
   getPortfolioPerformance: () => fetchAPI('/api/portfolio/performance'),
   getPortfolioSuggestions: () => fetchAPI('/api/portfolio/suggestions'),
 

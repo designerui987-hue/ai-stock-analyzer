@@ -127,10 +127,10 @@ async function handleResolution(req: Request) {
           },
         });
 
-        // Dispatch alert on meaningful resolution
+        // Dispatch alert on meaningful resolution to actual subscribed users
         if (resolution.status === 'TARGET_HIT' || resolution.status === 'SL_HIT') {
           const alertType = resolution.status === 'TARGET_HIT' ? 'target_hit' : 'sl_hit';
-          await sendAlert('system', alertType, {
+          const alertPayload = {
             symbol: signal.symbol,
             signal_type: signal.signal_type as any,
             price: resolution.closed_price ?? signal.entry_price,
@@ -140,7 +140,13 @@ async function handleResolution(req: Request) {
             confidence_pct: signal.confidence_pct,
             closed_price: resolution.closed_price ?? signal.entry_price,
             pnl_pct: resolution.realized_pnl_pct ?? 0,
-          });
+          };
+
+          const subscribers = await prisma.alertPreference.findMany().catch(() => []);
+          const targetUsers = subscribers.length > 0 ? subscribers.map((s) => s.user_id) : ['system'];
+          for (const targetUser of targetUsers) {
+            await sendAlert(targetUser, alertType, alertPayload).catch(() => {});
+          }
         }
 
         results.resolved++;
