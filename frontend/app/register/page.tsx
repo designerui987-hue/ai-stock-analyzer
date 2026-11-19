@@ -86,86 +86,76 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen w-full flex bg-[#F8FAFC] dark:bg-[#0B0F17] text-[#111827] dark:text-[#F8FAFC] antialiased selection:bg-indigo-500/20">
+    <div className="min-h-screen w-full flex bg-[#F5F7F7] text-[#142B32] antialiased">
       {/* Left Side (40% Desktop): Brand Section */}
-      <div className="hidden lg:flex lg:w-[40%] flex-col justify-between p-12 relative overflow-hidden bg-slate-100/70 dark:bg-[#0E1523] border-r border-slate-200 dark:border-white/[0.08]">
-        <div className="absolute inset-0 pointer-events-none opacity-5 dark:opacity-10 flex items-center justify-center">
-          <svg
-            width="100%"
-            height="100%"
-            viewBox="0 0 800 600"
-            fill="none"
-            className="w-full h-full text-slate-900 dark:text-white stroke-current"
-          >
-            <path d="M0 450 Q 200 350, 400 420 T 800 200" strokeWidth="2" strokeDasharray="4 4" />
-            <path d="M0 500 Q 250 400, 500 300 T 800 150" strokeWidth="3" />
-          </svg>
-        </div>
-
+      <div className="hidden lg:flex lg:w-[40%] flex-col justify-between p-12 relative overflow-hidden bg-[#142C33] text-[#c2ced0] border-r border-[#203c44]">
         <div className="relative z-10">
-          <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-btn bg-indigo-600 text-white flex items-center justify-center shadow-subtle">
-              <TrendingUp className="w-5 h-5 stroke-[2.2]" />
+          <div className="flex items-center space-x-3 text-white font-semibold text-2xl tracking-[-0.6px]">
+            <div className="w-[34px] h-[34px] rounded-[10px] bg-[#b6e6c9] text-[#14372e] flex items-center justify-center font-bold text-sm shrink-0">
+              <svg className="w-5 h-5 stroke-current" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 17V9m5 8V5m5 12v-6m5 6V3" />
+              </svg>
             </div>
-            <span className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-              StockAI
+            <span>
+              stockai<span className="text-[#a7d7bd]">.</span>
             </span>
           </div>
 
           <div className="mt-12 space-y-3">
-            <h1 className="text-display font-semibold text-slate-900 dark:text-slate-100 leading-tight">
-              Start Investing with AI Institutional Intelligence
+            <h1 className="text-[32px] font-semibold text-white tracking-[-1px] leading-tight">
+              Create your research workspace.
             </h1>
-            <p className="text-body text-slate-600 dark:text-[#CBD5E1]">
-              Join thousands of smart investors using real-time predictive models, portfolio telemetry, and instant risk alerts.
+            <p className="text-sm text-[#b6c7ca] leading-relaxed">
+              Track your personal watchlist, test ideas with paper limit orders, and explore rule-based equity analysis.
             </p>
           </div>
         </div>
 
         <div className="relative z-10 space-y-6 my-8">
-          <div className="flex items-start space-x-4">
-            <div className="p-2.5 rounded-btn bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.08] text-indigo-600 dark:text-indigo-400 shrink-0">
+          <div className="flex items-start space-x-3.5">
+            <div className="p-2.5 rounded-[8px] bg-[#203c44] text-[#a7d7bd] shrink-0">
               <TrendingUp className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Institutional Accuracy
+              <h3 className="text-sm font-semibold text-white">
+                Deterministic Rule Observations
               </h3>
-              <p className="text-caption text-slate-500 dark:text-[#64748B] mt-0.5">
-                Backtested signals across all NIFTY 50 equities.
+              <p className="text-xs text-[#899DA3] mt-0.5 leading-relaxed">
+                Objective indicator signals evaluated with documented mathematical formulas.
               </p>
             </div>
           </div>
 
-          <div className="flex items-start space-x-4">
-            <div className="p-2.5 rounded-btn bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.08] text-indigo-600 dark:text-indigo-400 shrink-0">
-              <Activity className="w-5 h-5" />
+          <div className="flex items-start space-x-3.5">
+            <div className="p-2.5 rounded-[8px] bg-[#203c44] text-[#a7d7bd] shrink-0">
+              <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Automated Portfolio Guard
+              <h3 className="text-sm font-semibold text-white">
+                Simulated Paper Trading
               </h3>
-              <p className="text-caption text-slate-500 dark:text-[#64748B] mt-0.5">
-                Stop-loss tracking and sector rebalancing recommendations.
+              <p className="text-xs text-[#899DA3] mt-0.5 leading-relaxed">
+                Atomic order ledger, bracket exits, and cash management with zero real capital risk.
               </p>
             </div>
           </div>
         </div>
 
-        <div className="relative z-10 pt-6 border-t border-slate-200/80 dark:border-white/[0.06] flex items-center space-x-2 text-caption text-slate-500 dark:text-[#64748B]">
-          <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
-          <span>No credit card required for 14-day full access demo.</span>
+        <div className="relative z-10 pt-6 border-t border-[#304951] text-xs text-[#899DA3]">
+          <span>NSE Equities · Personal research workspace</span>
         </div>
       </div>
 
       {/* Right Side (60% Desktop): Registration Card */}
       <div className="flex-1 flex flex-col justify-between items-center p-6 sm:p-12 overflow-y-auto">
         <div className="lg:hidden w-full max-w-[460px] flex items-center space-x-3 mb-6">
-          <div className="w-8 h-8 rounded-btn bg-indigo-600 text-white flex items-center justify-center">
-            <TrendingUp className="w-4 h-4" />
+          <div className="w-[30px] h-[30px] rounded-[8px] bg-[#b6e6c9] text-[#14372e] flex items-center justify-center font-bold text-xs shrink-0">
+            <svg className="w-4 h-4 stroke-current" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 17V9m5 8V5m5 12v-6m5 6V3" />
+            </svg>
           </div>
-          <span className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100">
-            StockAI
+          <span className="text-lg font-semibold tracking-tight text-[#142B32]">
+            stockai<span className="text-[#087F73]">.</span>
           </span>
         </div>
 

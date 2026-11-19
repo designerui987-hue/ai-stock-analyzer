@@ -1,117 +1,117 @@
 'use client';
 
-import { useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  LayoutDashboard,
-  TrendingUp,
-  Briefcase,
-  Eye,
-  Zap,
-  Brain,
-  MessageSquare,
-  Settings,
-  Menu,
-  X,
-  Activity,
-  BarChart2,
-  ShoppingBag,
-  Database,
-} from 'lucide-react';
+import { Home, Compass, Bookmark, Briefcase, Sparkles, Settings, X } from 'lucide-react';
+import { openResearchCompanion } from '@/components/layout/ResearchCompanionDrawer';
+import { clsx } from 'clsx';
 
-const NAV = [
-  { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/stocks/RELIANCE', icon: TrendingUp, label: 'Stock Analysis' },
-  { href: '/orders', icon: ShoppingBag, label: 'Orders' },
-  { href: '/portfolio', icon: Briefcase, label: 'Portfolio' },
-  { href: '/watchlist', icon: Eye, label: 'Watchlist' },
-  { href: '/heatmap', icon: Zap, label: 'Market Heatmap' },
-  { href: '/insights', icon: Brain, label: 'AI Insights' },
-  { href: '/performance', icon: Activity, label: 'Performance Ledger' },
-  { href: '/backtest', icon: BarChart2, label: 'Backtest Engine' },
-  { href: '/assistant', icon: MessageSquare, label: 'AI Assistant' },
-  { href: '/data-sources', icon: Database, label: 'Data Sources' },
-  { href: '/settings', icon: Settings, label: 'Settings' },
+const PRIMARY_NAV = [
+  { href: '/dashboard', aliases: ['/', '/dashboard'], icon: Home, label: 'Today' },
+  { href: '/stocks', aliases: ['/stocks', '/heatmap'], icon: Compass, label: 'Explore' },
+  { href: '/watchlist', aliases: ['/watchlist'], icon: Bookmark, label: 'Watchlist' },
+  { href: '/portfolio', aliases: ['/portfolio', '/orders', '/portfolio/risk'], icon: Briefcase, label: 'Portfolio' },
 ];
 
-export default function MobileNav() {
-  const [open, setOpen] = useState(false);
-  const path = usePathname();
+export default function MobileNav({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  const pathname = usePathname();
+
+  if (!isOpen) return null;
 
   return (
     <>
-      {/* Mobile Menu Button - only visible on small screens */}
-      <button
-        onClick={() => setOpen(!open)}
-        aria-label={open ? 'Close menu' : 'Open menu'}
-        className="md:hidden fixed bottom-6 right-6 z-50 w-14 h-14 flex items-center justify-center rounded-full text-white shadow-lg"
-        style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}
-      >
-        {open ? <X size={24} /> : <Menu size={24} />}
-      </button>
+      {/* Mobile backdrop */}
+      <div
+        className="fixed inset-0 bg-[#0c232c]/60 z-50 md:hidden backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
 
-      {/* Mobile Menu */}
-      <AnimatePresence>
-        {open && (
-          <>
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setOpen(false)}
-              className="md:hidden fixed inset-0 bg-black/50 z-40"
-            />
-
-            {/* Menu Panel — uses Tailwind theme-aware classes */}
-            <motion.nav
-              initial={{ x: 300, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 300, opacity: 0 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="md:hidden fixed right-0 top-0 bottom-0 w-64 z-40 overflow-y-auto flex flex-col bg-white dark:bg-[#0e1117] border-l border-slate-200 dark:border-white/[0.06]"
+      {/* Slide-out Sidebar Drawer */}
+      <div className="fixed inset-y-0 left-0 w-64 bg-[#142C33] text-[#c2ced0] z-50 p-6 flex flex-col justify-between shadow-2xl md:hidden">
+        <div>
+          {/* Top Header */}
+          <div className="flex items-center justify-between mb-8">
+            <div className="flex items-center gap-2.5 text-white font-semibold text-xl">
+              <div className="w-8 h-8 rounded-lg bg-[#b6e6c9] text-[#14372e] flex items-center justify-center font-bold text-xs">
+                <svg className="w-4 h-4 stroke-current" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 17V9m5 8V5m5 12v-6m5 6V3" />
+                </svg>
+              </div>
+              <span>
+                stockai<span className="text-[#a7d7bd]">.</span>
+              </span>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-[#899DA3] hover:text-white rounded-md"
+              aria-label="Close navigation"
             >
-              {/* Mobile Logo */}
-              <div className="flex items-center gap-3 px-4 py-5 flex-shrink-0 border-b border-slate-200 dark:border-white/[0.06]">
-                <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center text-sm font-black flex-shrink-0 text-white"
-                  style={{ background: 'linear-gradient(135deg,#6366f1,#a855f7)' }}
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="text-[11px] text-[#759097] tracking-[1.6px] font-semibold mb-3 uppercase">
+            YOUR WORKSPACE
+          </div>
+
+          <nav className="space-y-1.5">
+            {PRIMARY_NAV.map(({ href, aliases, icon: Icon, label }) => {
+              const isActive =
+                href === '/dashboard'
+                  ? pathname === '/dashboard' || pathname === '/'
+                  : aliases.some((a) => pathname === a || pathname.startsWith(a + '/'));
+
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={onClose}
+                  className={clsx(
+                    'flex items-center gap-3 px-3.5 py-3 rounded-[8px] text-sm transition-all',
+                    isActive
+                      ? 'bg-[#304b50] text-white font-medium shadow-[inset_3px_0_#b6e6c9]'
+                      : 'text-[#b6c7ca] hover:bg-[#203c44] hover:text-white'
+                  )}
+                  aria-current={isActive ? 'page' : undefined}
                 >
-                  <TrendingUp size={20} />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900 dark:text-white leading-none">StockAI</p>
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">AI-Powered Analysis</p>
-                </div>
-              </div>
+                  <Icon className="w-4 h-4 shrink-0 stroke-[1.8]" />
+                  <span>{label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
 
-              {/* Mobile Nav Items */}
-              <div className="px-2 space-y-0.5 py-4 flex-1">
-                {NAV.map(({ href, icon: Icon, label }) => {
-                  const active = href === '/dashboard' ? path === '/dashboard' : path.startsWith(href.replace('/RELIANCE', ''));
-                  return (
-                    <Link
-                      key={href}
-                      href={href}
-                      onClick={() => setOpen(false)}
-                      className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
-                        active
-                          ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20'
-                          : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-slate-200 border border-transparent'
-                      }`}>
-                      <Icon size={20} className="flex-shrink-0" />
-                      <span>{label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
+        <div className="pt-6 border-t border-[#304951] space-y-3">
+          <button
+            onClick={() => {
+              onClose();
+              openResearchCompanion();
+            }}
+            className="w-full border border-[#365059] hover:bg-[#203c44] rounded-[10px] py-2.5 px-3 text-xs text-[#e2edee] flex items-center gap-2"
+          >
+            <Sparkles className="w-4 h-4 text-[#a7d7bd]" />
+            <span>Ask your research</span>
+          </button>
 
-            </motion.nav>
-          </>
-        )}
-      </AnimatePresence>
+          <Link
+            href="/settings"
+            onClick={onClose}
+            className="flex items-center gap-2.5 px-3 py-2 text-xs text-[#adc0c5] hover:text-white rounded-[8px] hover:bg-[#203c44]"
+          >
+            <Settings className="w-4 h-4" />
+            <span>Settings & Preferences</span>
+          </Link>
+        </div>
+      </div>
     </>
   );
 }

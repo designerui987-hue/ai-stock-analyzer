@@ -1,27 +1,23 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
-  ArrowUpRight,
-  AlertTriangle,
-  RefreshCw,
-  Lightbulb,
-  PieChart as PieIcon,
   Plus,
   Trash2,
   TrendingUp,
   TrendingDown,
-  Sparkles,
-  Wallet,
   Briefcase,
+  AlertTriangle,
+  RefreshCw,
+  ShoppingBag,
+  Shield,
   Layers,
-  ShieldCheck,
+  X,
 } from 'lucide-react';
-import { Card } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
-import { formatNumber } from '@/lib/data';
+import { StockLogo } from '@/components/ui/StockLogo';
+import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
+import { formatINR, formatNumberIN, formatPercent } from '@/lib/format';
 import { api, auth } from '@/lib/api';
 import { useAuth } from '@/store/useAuth';
 
@@ -35,24 +31,7 @@ interface BackendHolding {
   current_value?: number | null;
   pnl?: number | null;
   pnl_pct?: number | null;
-  day_change?: number | null;
   sector?: string;
-  as_of?: string | null;
-  source?: string;
-  freshness?: string;
-}
-
-interface PortfolioSummary {
-  status: string;
-  total_invested: number;
-  current_value: number | null;
-  total_pnl: number | null;
-  total_pnl_pct: number | null;
-  day_pnl: number | null;
-  day_pnl_pct: number | null;
-  holdings_count: number;
-  holdings: BackendHolding[];
-  sector_allocation?: Record<string, number>;
 }
 
 interface PaperPosition {
@@ -68,103 +47,50 @@ interface PaperPosition {
 
 export default function PortfolioPage() {
   const accountId = useAuth((state) => state.user?.id);
-  if (!accountId) return <p role="status" className="p-8 text-center text-slate-500">Loading your portfolio…</p>;
-  return <AccountPortfolio key={accountId} accountId={accountId} storageKey={`portfolio-holdings:${accountId}`} />;
+  if (!accountId) {
+    return (
+      <div className="p-8 text-center text-xs text-[#687A81]">
+        Loading your portfolio…
+      </div>
+    );
+  }
+  return <AccountPortfolio accountId={accountId} storageKey={`portfolio-holdings:${accountId}`} />;
 }
 
 function AccountPortfolio({ accountId, storageKey }: { accountId: string; storageKey: string }) {
-  const [activeAccountTab, setActiveAccountTab] = useState<'MANUAL' | 'PAPER' | 'BROKER'>('MANUAL');
-  const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
-  const [paperOrders, setPaperOrders] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'MANUAL' | 'PAPER' | 'BROKER'>('MANUAL');
+  const [portfolio, setPortfolio] = useState<any>(null);
   const [paperPositions, setPaperPositions] = useState<PaperPosition[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showAddForm, setShowAddForm] = useState(false);
+  const [brokerConnected, setBrokerConnected] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [showAddModal, setShowAddModal] = useState<boolean>(false);
 
   // Form State
   const [symbolInput, setSymbolInput] = useState('');
   const [qtyInput, setQtyInput] = useState('');
   const [priceInput, setPriceInput] = useState('');
-  const [loadingAdd, setLoadingAdd] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const fetchPortfolioData = useCallback(async () => {
     try {
       setLoading(true);
-      const [portRes, paperOrdersRes, paperAccountRes] = await Promise.all([
+      const [portRes, paperAccountRes, brokerRes] = await Promise.all([
         api.getPortfolio().catch(() => null),
-        fetch('/api/broker/orders?mode=PAPER', { headers: auth.getAuthHeaders() })
+        fetch('/api/broker/paper-account', { headers: auth.getAuthHeaders() })
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
-        fetch('/api/broker/paper-account', { headers: auth.getAuthHeaders() })
+        fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
       ]);
 
       if (portRes && Array.isArray(portRes.holdings)) {
-        // Safe legacy localStorage migration:
-        // Preserves unmigrated records until confirmed saved, and prevents duplicate additions
-        if (typeof window !== 'undefined') {
-          const savedLegacy = localStorage.getItem(storageKey);
-          if (savedLegacy) {
-            try {
-              const legacyList = JSON.parse(savedLegacy);
-              if (Array.isArray(legacyList) && legacyList.length > 0) {
-                const existingSymbols = new Set(portRes.holdings.map((h: any) => h.symbol.toUpperCase()));
-                const unmigrated: any[] = [];
-                let anyAdded = false;
-
-                for (const item of legacyList) {
-                  const sym = (item.symbol || '').trim().toUpperCase();
-                  if (!sym || item.qty <= 0 || item.avg_price <= 0) continue;
-
-                  if (existingSymbols.has(sym)) {
-                    // Already persisted in database
-                    continue;
-                  }
-
-                  try {
-                    const addRes = await api.addHolding(sym, Number(item.qty), Number(item.avg_price));
-                    if (addRes && !addRes.error) {
-                      existingSymbols.add(sym);
-                      anyAdded = true;
-                    } else {
-                      unmigrated.push(item);
-                    }
-                  } catch {
-                    unmigrated.push(item);
-                  }
-                }
-
-                if (unmigrated.length === 0) {
-                  localStorage.removeItem(storageKey);
-                } else {
-                  localStorage.setItem(storageKey, JSON.stringify(unmigrated));
-                }
-
-                if (anyAdded) {
-                  const refreshedPort = await api.getPortfolio().catch(() => null);
-                  if (refreshedPort) {
-                    setPortfolio(refreshedPort);
-                    return;
-                  }
-                }
-              }
-            } catch (err) {
-              console.warn('Failed to migrate legacy localStorage holdings:', err);
-            }
-          }
-        }
         setPortfolio(portRes);
       }
 
-      if (paperOrdersRes && Array.isArray(paperOrdersRes.paper_orders || paperOrdersRes.orders)) {
-        setPaperOrders(paperOrdersRes.paper_orders || paperOrdersRes.orders);
-      }
-
-      // Read canonical paper positions from the authoritative account service
-      // Includes complete history (>100 records), execution-order sorting, and fee accounting
       if (paperAccountRes?.success && paperAccountRes?.account?.positions) {
-        const canonicalPositions: PaperPosition[] = Object.values(paperAccountRes.account.positions)
+        const canonical: PaperPosition[] = Object.values(paperAccountRes.account.positions)
           .filter((p: any) => p.quantity > 0)
           .map((p: any) => ({
             symbol: p.symbol,
@@ -177,37 +103,29 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
             pnl_pct: null,
           }));
 
-        setPaperPositions(canonicalPositions);
-
-        // Fetch live quotes for canonical paper positions
-        for (const pos of canonicalPositions) {
-          void api.getQuoteData(pos.symbol).then((q) => {
-            if (typeof q?.price === 'number' && q.price > 0) {
-              setPaperPositions((prev) =>
-                prev.map((entry) => {
-                  if (entry.symbol !== pos.symbol) return entry;
-                  const cur = entry.quantity * q.price;
-                  const pnl = cur - entry.invested;
-                  const pnlPct = entry.invested > 0 ? (pnl / entry.invested) * 100 : 0;
-                  return {
-                    ...entry,
-                    current_price: q.price,
-                    current_value: cur,
-                    pnl,
-                    pnl_pct: pnlPct,
-                  };
-                })
-              );
+        // Fetch live quotes for paper positions
+        await Promise.all(
+          canonical.map(async (pos) => {
+            const q = await api.getQuoteData(pos.symbol, 'NSE').catch(() => null);
+            if (q && typeof q.price === 'number') {
+              pos.current_price = q.price;
+              pos.current_value = q.price * pos.quantity;
+              pos.pnl = pos.current_value - pos.invested;
+              pos.pnl_pct = pos.invested > 0 ? (pos.pnl / pos.invested) * 100 : 0;
             }
-          }).catch(() => {});
-        }
+          })
+        );
+
+        setPaperPositions(canonical);
       }
-    } catch (e) {
-      console.error('Portfolio fetch error:', e);
+
+      if (brokerRes?.success && brokerRes?.connected && brokerRes?.connection?.broker === 'KITE') {
+        setBrokerConnected(true);
+      }
     } finally {
       setLoading(false);
     }
-  }, [storageKey]);
+  }, []);
 
   useEffect(() => {
     fetchPortfolioData();
@@ -215,37 +133,32 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
 
   const handleAddHolding = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAddError(null);
-
     const sym = symbolInput.trim().toUpperCase();
     const qty = parseInt(qtyInput, 10);
-    const avgPrice = parseFloat(priceInput);
+    const avg = parseFloat(priceInput);
 
-    if (!sym) {
-      setAddError('Please enter a valid stock symbol.');
-      return;
-    }
-    if (isNaN(qty) || qty <= 0) {
-      setAddError('Please enter a valid positive integer quantity.');
-      return;
-    }
-    if (isNaN(avgPrice) || avgPrice <= 0) {
-      setAddError('Please enter a valid positive average buy price.');
+    if (!sym || isNaN(qty) || qty <= 0 || isNaN(avg) || avg <= 0) {
+      setFormError('Please enter a valid symbol, whole share quantity, and positive price.');
       return;
     }
 
-    setLoadingAdd(true);
+    setIsSubmitting(true);
+    setFormError(null);
     try {
-      await api.addHolding(sym, qty, avgPrice);
-      setSymbolInput('');
-      setQtyInput('');
-      setPriceInput('');
-      setShowAddForm(false);
-      await fetchPortfolioData();
+      const res = await api.addHolding(sym, qty, avg);
+      if (res && res.error) {
+        setFormError(res.error);
+      } else {
+        setShowAddModal(false);
+        setSymbolInput('');
+        setQtyInput('');
+        setPriceInput('');
+        await fetchPortfolioData();
+      }
     } catch (err: any) {
-      setAddError(err?.message || 'Failed to save holding to server.');
+      setFormError(err?.message || 'Failed to save holding to server.');
     } finally {
-      setLoadingAdd(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -253,534 +166,445 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
     try {
       await api.removeHolding(sym);
       await fetchPortfolioData();
-    } catch (err) {
-      console.error('Failed to remove holding:', err);
+    } catch {
+      // Ignore
     }
   };
 
-  const manualHoldings = portfolio?.holdings || [];
-  const manualInvested = portfolio?.total_invested ?? manualHoldings.reduce((sum, h) => sum + h.qty * h.avg_price, 0);
-  const manualCurrentVal = portfolio?.current_value;
-  const manualPnL = portfolio?.total_pnl;
-  const manualPnLPct = portfolio?.total_pnl_pct;
-  const hasCompleteQuotes = portfolio?.status === 'available' || (manualHoldings.length > 0 && manualHoldings.every((h) => h.current_price !== null));
-  const isPositive = (manualPnL ?? 0) >= 0;
+  // Derive metrics for active tab
+  const activeHoldings = useMemo(() => {
+    if (activeTab === 'MANUAL') {
+      return (portfolio?.holdings || []).map((h: any) => ({
+        symbol: h.symbol,
+        name: h.name || h.symbol,
+        qty: h.qty,
+        avg_price: h.avg_price,
+        current_price: h.current_price,
+        invested: h.invested || h.qty * h.avg_price,
+        current_value: h.current_value || (h.current_price ? h.current_price * h.qty : null),
+        pnl: h.pnl,
+        pnl_pct: h.pnl_pct,
+        sector: h.sector || 'Equities',
+      }));
+    }
+    if (activeTab === 'PAPER') {
+      return paperPositions.map((p) => ({
+        symbol: p.symbol,
+        name: p.symbol,
+        qty: p.quantity,
+        avg_price: p.avg_price,
+        current_price: p.current_price,
+        invested: p.invested,
+        current_value: p.current_value || (p.current_price ? p.current_price * p.quantity : null),
+        pnl: p.pnl,
+        pnl_pct: p.pnl_pct,
+        sector: 'Equities',
+      }));
+    }
+    return [];
+  }, [activeTab, portfolio, paperPositions]);
 
-  const sectorMap = portfolio?.sector_allocation || {};
+  const { totalInvested, totalCurrentValue, totalPnl, totalPnlPct } = useMemo(() => {
+    let invested = 0;
+    let current = 0;
+    activeHoldings.forEach((h: any) => {
+      invested += h.invested || 0;
+      current += h.current_value || h.invested || 0;
+    });
+    const pnl = current - invested;
+    const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
+    return {
+      totalInvested: invested,
+      totalCurrentValue: current,
+      totalPnl: pnl,
+      totalPnlPct: pnlPct,
+    };
+  }, [activeHoldings]);
+
+  // Sector breakdown
+  const sectors = useMemo(() => {
+    const map: Record<string, number> = {};
+    activeHoldings.forEach((h: any) => {
+      const sec = h.sector || 'Equities';
+      const val = h.current_value || h.invested || 0;
+      map[sec] = (map[sec] || 0) + val;
+    });
+    return map;
+  }, [activeHoldings]);
+
+  const hasHoldings = activeHoldings.length > 0;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
-      {/* Portfolio Header & Account Selectors */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-6 animate-fade-in">
+      {/* ── Page Intro ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h1 className="text-display font-semibold text-slate-900 dark:text-slate-100">
-            Portfolio &amp; Asset Management
+          <div className="eyebrow text-[#687A81] mb-2">YOUR INVESTMENTS, IN CONTEXT</div>
+          <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+            See the whole picture.
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Authoritative positions persisted per-account in PostgreSQL with live market valuation.
+          <p className="text-sm text-[#687A81] mt-1.5">
+            Holdings, performance, and the exposure behind them.
           </p>
         </div>
 
-        <div className="flex items-center space-x-3">
-          {activeAccountTab === 'MANUAL' && (
-            <Button
-              variant="primary"
-              size="md"
-              icon={<Plus className="w-4 h-4" />}
-              onClick={() => setShowAddForm(!showAddForm)}
+        <div className="flex items-center gap-2">
+          {activeTab === 'MANUAL' && (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-3.5 py-1.5 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[7px] text-xs font-semibold flex items-center gap-1.5 shadow-sm"
             >
-              {showAddForm ? 'Close Form' : 'Add Holding'}
-            </Button>
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add a holding</span>
+            </button>
           )}
-          <div className="flex items-center space-x-2 border-b border-slate-200 dark:border-white/[0.08] pb-1">
+          {activeTab === 'PAPER' && (
             <Link
-              href="/portfolio"
-              className="px-4 py-2 rounded-btn text-xs font-semibold bg-indigo-600 text-white shadow-subtle"
+              href="/orders"
+              className="px-3.5 py-1.5 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[7px] text-xs font-semibold flex items-center gap-1.5 shadow-sm"
             >
-              Holdings Overview
+              <ShoppingBag className="w-3.5 h-3.5" />
+              <span>Order Blotter</span>
             </Link>
-            <Link
-              href="/portfolio/risk"
-              className="px-4 py-2 rounded-btn text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
-            >
-              Risk &amp; Heat
-            </Link>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Account Type Selector Tabs */}
-      <div className="flex border-b border-slate-200 dark:border-white/[0.08] gap-6">
+      {/* ── Account Tabs: Manual Holdings vs Paper Positions vs Broker ── */}
+      <div className="flex items-center gap-1 p-1 bg-[#EEF2F2] border border-[#E1E7E8] rounded-[9px] w-fit">
         <button
-          onClick={() => setActiveAccountTab('MANUAL')}
-          className={`pb-3 text-xs font-semibold flex items-center space-x-2 border-b-2 transition-colors ${
-            activeAccountTab === 'MANUAL'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          onClick={() => setActiveTab('MANUAL')}
+          className={`px-3 py-1 rounded-[6px] text-xs font-semibold transition-all ${
+            activeTab === 'MANUAL'
+              ? 'bg-white text-[#142B32] shadow-sm'
+              : 'text-[#60737A] hover:text-[#142B32]'
           }`}
         >
-          <Briefcase className="w-4 h-4" />
-          <span>Manual Holdings (DB Backed)</span>
-          <Badge variant="neutral" size="sm">
-            {manualHoldings.length}
-          </Badge>
+          Manual Holdings
         </button>
-
         <button
-          onClick={() => setActiveAccountTab('PAPER')}
-          className={`pb-3 text-xs font-semibold flex items-center space-x-2 border-b-2 transition-colors ${
-            activeAccountTab === 'PAPER'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          onClick={() => setActiveTab('PAPER')}
+          className={`px-3 py-1 rounded-[6px] text-xs font-semibold transition-all ${
+            activeTab === 'PAPER'
+              ? 'bg-white text-[#142B32] shadow-sm'
+              : 'text-[#60737A] hover:text-[#142B32]'
           }`}
         >
-          <Wallet className="w-4 h-4" />
-          <span>Paper Trading Positions</span>
-          <Badge variant="indigo" size="sm">
-            {paperPositions.length} Active
-          </Badge>
+          Paper Account ({paperPositions.length})
         </button>
-
         <button
-          onClick={() => setActiveAccountTab('BROKER')}
-          className={`pb-3 text-xs font-semibold flex items-center space-x-2 border-b-2 transition-colors ${
-            activeAccountTab === 'BROKER'
-              ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          onClick={() => setActiveTab('BROKER')}
+          className={`px-3 py-1 rounded-[6px] text-xs font-semibold transition-all ${
+            activeTab === 'BROKER'
+              ? 'bg-white text-[#142B32] shadow-sm'
+              : 'text-[#60737A] hover:text-[#142B32]'
           }`}
         >
-          <ShieldCheck className="w-4 h-4" />
-          <span>Broker Live Account (Kite)</span>
-          <Badge variant="neutral" size="sm">
-            Sandbox
-          </Badge>
+          Broker (Kite)
         </button>
       </div>
 
-      {/* Add New Holding Form Drawer */}
-      {showAddForm && activeAccountTab === 'MANUAL' && (
-        <Card className="p-6 border-indigo-500/30 bg-indigo-500/5 space-y-4 animate-in fade-in zoom-in duration-150">
-          <div className="flex items-center justify-between border-b border-slate-200 dark:border-white/[0.08] pb-3">
-            <div className="flex items-center space-x-2">
-              <Plus className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                Add Stock to Database Holdings
-              </h3>
-            </div>
-            <button
-              onClick={() => setShowAddForm(false)}
-              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-sm font-bold"
-            >
-              ✕
-            </button>
-          </div>
-
-          <form onSubmit={handleAddHolding} className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
-            <div>
-              <label className="block text-slate-500 font-medium mb-1">Stock Ticker Symbol</label>
-              <input
-                type="text"
-                placeholder="e.g. RELIANCE, TCS, INFY"
-                value={symbolInput}
-                onChange={(e) => setSymbolInput(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-slate-500 font-medium mb-1">Quantity (Shares)</label>
-              <input
-                type="number"
-                step="1"
-                min="1"
-                placeholder="e.g. 50"
-                value={qtyInput}
-                onChange={(e) => setQtyInput(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-slate-500 font-medium mb-1">Avg Buy Price (₹)</label>
-              <input
-                type="number"
-                step="any"
-                min="0.01"
-                placeholder="e.g. 1250.00"
-                value={priceInput}
-                onChange={(e) => setPriceInput(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                required
-              />
-            </div>
-
-            <div className="flex items-end">
-              <Button
-                variant="primary"
-                size="md"
-                type="submit"
-                disabled={loadingAdd}
-                className="w-full justify-center text-xs font-semibold !bg-indigo-600 hover:!bg-indigo-700"
+      {/* ── Add Holding Modal ───────────────────────────────────────────── */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-[#0c232c]/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-[16px] max-w-sm w-full p-6 shadow-2xl border border-[#E1E7E8] space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E1E7E8] pb-3">
+              <h3 className="text-base font-semibold text-[#142B32]">Add a Holding</h3>
+              <button
+                onClick={() => {
+                  setShowAddModal(false);
+                  setFormError(null);
+                }}
+                className="p-1 text-[#687A81] hover:text-[#142B32] rounded"
               >
-                {loadingAdd ? 'Saving...' : 'Save Holding'}
-              </Button>
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          </form>
 
-          {addError && <p className="text-xs text-red-600 dark:text-red-400 font-medium">{addError}</p>}
-        </Card>
+            <form onSubmit={handleAddHolding} className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-[#142B32] block mb-1">
+                  NSE Symbol
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. RELIANCE, TCS, INFY"
+                  value={symbolInput}
+                  onChange={(e) => setSymbolInput(e.target.value)}
+                  required
+                  className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-xs uppercase bg-white text-[#142B32]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-[#142B32] block mb-1">
+                    Shares Held
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="e.g. 25"
+                    value={qtyInput}
+                    onChange={(e) => setQtyInput(e.target.value)}
+                    required
+                    className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-xs font-mono bg-white text-[#142B32]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-[#142B32] block mb-1">
+                    Avg Buy Price (₹)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min={0.01}
+                    placeholder="e.g. 1350"
+                    value={priceInput}
+                    onChange={(e) => setPriceInput(e.target.value)}
+                    required
+                    className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-xs font-mono bg-white text-[#142B32]"
+                  />
+                </div>
+              </div>
+
+              {formError && <p className="text-xs text-[#BB4B48]">{formError}</p>}
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-2 bg-[#087F73] hover:bg-[#076f64] text-white rounded-[7px] text-xs font-semibold disabled:opacity-50"
+              >
+                {isSubmitting ? 'Saving Holding...' : 'Save Holding'}
+              </button>
+            </form>
+          </div>
+        </div>
       )}
 
-      {/* VIEW 1: MANUAL HOLDINGS */}
-      {activeAccountTab === 'MANUAL' && (
+      {/* ── Broker Tab Disconnected State ───────────────────────────────── */}
+      {activeTab === 'BROKER' && !brokerConnected && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
+          <div className="w-14 h-14 rounded-xl bg-[#F0F5F3] text-[#087F73] border border-[#E1E7E8] mx-auto flex items-center justify-center">
+            <Briefcase className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-[22px] font-semibold text-[#142B32]">
+              Connect Zerodha Kite
+            </h2>
+            <p className="text-xs text-[#687A81] max-w-sm mx-auto mt-2 leading-relaxed">
+              Connect your broker credentials to synchronize demat holdings and live positions.
+            </p>
+          </div>
+          <Link
+            href="/settings"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[8px] text-xs font-semibold"
+          >
+            <span>Open Broker Settings</span>
+          </Link>
+        </section>
+      )}
+
+      {/* ── Empty State for Manual / Paper ──────────────────────────────── */}
+      {activeTab !== 'BROKER' && !loading && !hasHoldings && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
+          <div className="w-14 h-14 rounded-xl bg-[#F0F5F3] text-[#087F73] border border-[#E1E7E8] mx-auto flex items-center justify-center">
+            <Briefcase className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-[22px] font-semibold text-[#142B32]">
+              Make this view yours.
+            </h2>
+            <p className="text-xs text-[#687A81] max-w-sm mx-auto mt-2 leading-relaxed">
+              {activeTab === 'MANUAL'
+                ? 'Add your current holdings to see their total value and your sector exposure.'
+                : 'Execute your first simulated paper order from Company Research to view active virtual positions.'}
+            </p>
+          </div>
+          {activeTab === 'MANUAL' ? (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[8px] text-xs font-semibold inline-flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add your first holding</span>
+            </button>
+          ) : (
+            <Link
+              href="/stocks/RELIANCE"
+              className="px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[8px] text-xs font-semibold inline-flex items-center gap-1.5"
+            >
+              <span>Explore Stocks & Trade Paper</span>
+            </Link>
+          )}
+        </section>
+      )}
+
+      {/* ── Populated Portfolio Layout ──────────────────────────────────── */}
+      {hasHoldings && (
         <>
-          {/* Top Summary Metrics */}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <Card className="flex flex-col justify-between">
-              <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">Total Invested</span>
-              <div className="mt-3">
-                <span className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-                  ₹{formatNumber(manualInvested)}
-                </span>
-              </div>
-            </Card>
-
-            <Card className="flex flex-col justify-between">
-              <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">Current Value</span>
-              <div className="mt-3">
-                <span className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-                  {manualCurrentVal !== null && manualCurrentVal !== undefined
-                    ? `₹${formatNumber(manualCurrentVal)}`
-                    : manualHoldings.length === 0
-                    ? '₹0.00'
-                    : 'Unavailable'}
-                </span>
-              </div>
-            </Card>
-
-            <Card className="flex flex-col justify-between">
-              <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">Total P&amp;L</span>
-              <div className="mt-3">
-                {manualPnL !== null && manualPnL !== undefined ? (
-                  <span
-                    className={`text-h2 font-semibold ${
-                      isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-                    }`}
-                  >
-                    {isPositive ? '+' : '−'}₹{formatNumber(Math.abs(manualPnL))}
-                  </span>
-                ) : (
-                  <span className="text-sm text-slate-500">Unavailable</span>
-                )}
-              </div>
-            </Card>
-
-            <Card className="flex flex-col justify-between">
-              <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">Return Rate</span>
-              <div className="mt-3 flex items-baseline space-x-2">
-                <span
-                  className={`text-h2 font-semibold ${
-                    isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-                  }`}
-                >
-                  {manualPnLPct !== null && manualPnLPct !== undefined
-                    ? `${isPositive ? '+' : ''}${manualPnLPct.toFixed(2)}%`
-                    : '—'}
-                </span>
-              </div>
-            </Card>
-
-            <Card className="flex flex-col justify-between">
-              <span className="text-caption text-slate-500 dark:text-slate-400 font-medium">Authoritative Positions</span>
-              <div className="mt-3">
-                <span className="text-h2 font-semibold text-indigo-600 dark:text-indigo-400">
-                  {manualHoldings.length} Assets
-                </span>
-              </div>
-            </Card>
-          </div>
-
-          {/* Holdings Table & Allocation */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card size="large" noPadding className="lg:col-span-2 overflow-hidden flex flex-col justify-between">
-              <div>
-                <div className="p-6 border-b border-slate-200 dark:border-white/[0.06] flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Authoritative Database Holdings
-                    </h3>
-                    <p className="text-caption text-slate-500 dark:text-slate-400">
-                      Synced across browsers and devices via PostgreSQL
-                    </p>
-                  </div>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    icon={<Plus className="w-3.5 h-3.5" />}
-                    onClick={() => setShowAddForm(true)}
-                  >
-                    Add Holding
-                  </Button>
-                </div>
-
-                {manualHoldings.length === 0 ? (
-                  <div className="p-12 text-center space-y-4">
-                    <PieIcon className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
-                    <div>
-                      <h4 className="text-base font-semibold text-slate-800 dark:text-slate-200">
-                        No Holdings Recorded In Database
-                      </h4>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-1">
-                        Add a holding with its symbol, quantity, and cost price to persist it securely.
-                      </p>
-                    </div>
-                    <Button
-                      variant="primary"
-                      size="md"
-                      icon={<Plus className="w-4 h-4" />}
-                      onClick={() => setShowAddForm(true)}
-                      className="mx-auto"
-                    >
-                      Add Your First Holding
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="sys-table">
-                      <thead>
-                        <tr>
-                          <th>Asset</th>
-                          <th className="text-right">Qty</th>
-                          <th className="text-right">Avg Price</th>
-                          <th className="text-right">CMP</th>
-                          <th className="text-right">Invested</th>
-                          <th className="text-right">P&amp;L</th>
-                          <th className="text-right">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {manualHoldings.map((h) => {
-                          const invested = h.qty * h.avg_price;
-                          const curVal = h.current_price !== null ? h.qty * h.current_price : null;
-                          const pnl = curVal !== null ? curVal - invested : null;
-                          const pnlPct = pnl !== null && invested > 0 ? ((pnl / invested) * 100).toFixed(2) : null;
-                          const pos = (pnl ?? 0) >= 0;
-
-                          return (
-                            <tr key={h.symbol}>
-                              <td>
-                                <Link href={`/stocks/${h.symbol}`} className="group">
-                                  <div className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                                    {h.symbol}
-                                  </div>
-                                  <div className="text-caption text-slate-500 dark:text-slate-400">
-                                    {h.name || h.symbol} • {h.source || 'verified'}
-                                  </div>
-                                </Link>
-                              </td>
-                              <td className="text-right font-medium">{h.qty}</td>
-                              <td className="text-right text-slate-600 dark:text-slate-400">
-                                ₹{formatNumber(h.avg_price)}
-                              </td>
-                              <td className="text-right font-semibold">
-                                {h.current_price === null ? (
-                                  <span className="text-xs text-amber-600 font-medium">Unavailable</span>
-                                ) : (
-                                  `₹${formatNumber(h.current_price)}`
-                                )}
-                              </td>
-                              <td className="text-right font-medium text-slate-700 dark:text-slate-300">
-                                ₹{formatNumber(invested)}
-                              </td>
-                              <td className="text-right">
-                                {pnl === null ? (
-                                  <span className="text-xs text-slate-400">—</span>
-                                ) : (
-                                  <>
-                                    <div
-                                      className={`font-semibold ${
-                                        pos
-                                          ? 'text-emerald-600 dark:text-emerald-400'
-                                          : 'text-red-600 dark:text-red-400'
-                                      }`}
-                                    >
-                                      {pos ? '+' : '−'}₹{formatNumber(Math.abs(pnl))}
-                                    </div>
-                                    <div className="text-[10px]">
-                                      <Badge variant={pos ? 'emerald' : 'red'} size="sm">
-                                        {pos ? '+' : ''}
-                                        {pnlPct}%
-                                      </Badge>
-                                    </div>
-                                  </>
-                                )}
-                              </td>
-                              <td className="text-right">
-                                <button
-                                  onClick={() => handleRemoveHolding(h.symbol)}
-                                  className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                                  aria-label={`Delete ${h.symbol} holding`}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </Card>
-
-            {/* Right Column: Sector Breakdown */}
-            <div className="space-y-6">
-              <Card className="space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-3">
-                  <div className="flex items-center space-x-2">
-                    <PieIcon className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Sector Breakdown</h3>
-                  </div>
-                  <span className="text-caption text-slate-500">Market Value Weight</span>
-                </div>
-
-                {Object.keys(sectorMap).length === 0 ? (
-                  <p className="text-xs text-slate-400 text-center py-4">
-                    {manualHoldings.length
-                      ? 'Live quotes required for all positions to calculate allocation.'
-                      : 'Add holdings to view sector allocation.'}
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    {Object.entries(sectorMap).map(([sec, val]) => (
-                      <div key={sec} className="space-y-1.5">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-slate-700 dark:text-slate-300 font-medium">{sec}</span>
-                          <span className="font-semibold text-slate-900 dark:text-slate-100">{val}%</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-indigo-600 dark:bg-indigo-500 rounded-full"
-                            style={{ width: `${val}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* VIEW 2: PAPER TRADING POSITIONS */}
-      {activeAccountTab === 'PAPER' && (
-        <div className="space-y-6">
-          <Card className="p-6">
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-white/[0.06] pb-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                  Paper Trading Simulated Ledger
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Positions derived dynamically from executed paper orders in the database order blotter.
-                </p>
-              </div>
-              <Link href="/orders">
-                <Button variant="primary" size="sm">
-                  View Full Paper Blotter
-                </Button>
-              </Link>
+          {/* Metrics Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-[#E1E7E8] border border-[#E1E7E8] rounded-[12px] overflow-hidden">
+            <div className="bg-white p-6">
+              <p className="text-xs text-[#687A81] mb-1">Current value</p>
+              <strong className="text-[28px] font-semibold text-[#142B32] font-mono tracking-tight block">
+                {formatINR(totalCurrentValue, 2)}
+              </strong>
+              <span className="text-[11px] text-[#687A81] mt-1 block">Based on latest quotes</span>
             </div>
 
-            {paperPositions.length === 0 ? (
-              <div className="p-12 text-center space-y-3">
-                <Wallet className="w-10 h-10 mx-auto text-slate-300 dark:text-slate-600" />
-                <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  No Active Paper Trading Positions
-                </h4>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                  Execute buy orders on the Stock Analysis page or Blotter in PAPER mode to build your paper portfolio.
-                </p>
+            <div className="bg-white p-6">
+              <p className="text-xs text-[#687A81] mb-1">Amount invested</p>
+              <strong className="text-[28px] font-semibold text-[#142B32] font-mono tracking-tight block">
+                {formatINR(totalInvested, 2)}
+              </strong>
+              <span className="text-[11px] text-[#687A81] mt-1 block">Cost basis</span>
+            </div>
+
+            <div className="bg-white p-6">
+              <p className="text-xs text-[#687A81] mb-1">Unrealised return</p>
+              <strong
+                className={`text-[28px] font-semibold font-mono tracking-tight block ${
+                  totalPnl >= 0 ? 'text-[#087F73]' : 'text-[#BB4B48]'
+                }`}
+              >
+                {totalPnl >= 0 ? '+' : ''}
+                {formatINR(totalPnl, 2)}
+              </strong>
+              <span className="text-[11px] text-[#687A81] mt-1 block">
+                {formatPercent(totalPnlPct)} · before fees
+              </span>
+            </div>
+          </div>
+
+          {/* Holdings Grid + Sector Exposure */}
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_310px] gap-6">
+            {/* Holdings Table */}
+            <section className="bg-white border border-[#E1E7E8] rounded-[14px] overflow-hidden">
+              <div className="p-5 md:p-6 pb-4 flex items-center justify-between border-b border-[#E1E7E8]">
+                <h2 className="text-[20px] font-semibold text-[#142B32]">Your holdings</h2>
+                <span className="text-xs text-[#687A81]">
+                  {activeTab === 'MANUAL' ? 'Manual Entries' : 'Paper Positions'}
+                </span>
               </div>
-            ) : (
-              <div className="overflow-x-auto mt-4">
-                <table className="sys-table">
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
                   <thead>
-                    <tr>
-                      <th>Symbol</th>
-                      <th className="text-right">Net Qty</th>
-                      <th className="text-right">Avg Cost</th>
-                      <th className="text-right">LTP</th>
-                      <th className="text-right">Cost Basis</th>
-                      <th className="text-right">Current Value</th>
-                      <th className="text-right">Unrealized P&amp;L</th>
+                    <tr className="border-b border-[#E1E7E8] bg-[#FAFBFA] text-[11px] uppercase tracking-wider text-[#687A81]">
+                      <th className="py-2.5 px-6 font-medium">Company</th>
+                      <th className="py-2.5 px-6 text-right font-medium">Value / Return</th>
+                      {activeTab === 'MANUAL' && (
+                        <th className="py-2.5 px-6 text-right font-medium">
+                          <span className="sr-only">Remove</span>
+                        </th>
+                      )}
                     </tr>
                   </thead>
-                  <tbody>
-                    {paperPositions.map((pos) => {
-                      const hasLtp = pos.current_price !== null;
-                      const isPos = (pos.pnl ?? 0) >= 0;
+                  <tbody className="divide-y divide-[#EDF0F0]">
+                    {activeHoldings.map((h: any) => {
+                      const pnl = (h.current_value || h.invested) - h.invested;
+                      const isUp = pnl >= 0;
+
                       return (
-                        <tr key={pos.symbol}>
-                          <td className="font-bold text-slate-900 dark:text-slate-100">{pos.symbol}</td>
-                          <td className="text-right font-medium">{pos.quantity}</td>
-                          <td className="text-right">₹{formatNumber(pos.avg_price)}</td>
-                          <td className="text-right font-semibold">
-                            {hasLtp ? `₹${formatNumber(pos.current_price!)}` : 'Awaiting quote'}
+                        <tr key={h.symbol} className="hover:bg-[#F9FBFA] transition-colors">
+                          <td className="py-3.5 px-6">
+                            <div className="flex items-center gap-3">
+                              <StockLogo symbol={h.symbol} size="sm" />
+                              <div>
+                                <Link
+                                  href={`/stocks/${h.symbol}`}
+                                  className="font-semibold text-[#142B32] hover:text-[#087F73] transition-colors"
+                                >
+                                  {h.symbol}
+                                </Link>
+                                <div className="text-xs text-[#687A81]">
+                                  {h.qty} shares · avg. {formatINR(h.avg_price, 2)}
+                                </div>
+                              </div>
+                            </div>
                           </td>
-                          <td className="text-right">₹{formatNumber(pos.invested)}</td>
-                          <td className="text-right">
-                            {pos.current_value !== null ? `₹${formatNumber(pos.current_value)}` : '—'}
+                          <td className="py-3.5 px-6 text-right font-mono">
+                            <div className="font-semibold text-[#142B32]">
+                              {formatINR(h.current_value || h.invested, 2)}
+                            </div>
+                            <div
+                              className={`text-xs ${
+                                isUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
+                              }`}
+                            >
+                              {isUp ? '+' : ''}
+                              {formatINR(pnl, 2)}
+                            </div>
                           </td>
-                          <td className="text-right">
-                            {pos.pnl !== null ? (
-                              <span
-                                className={`font-semibold ${
-                                  isPos ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-                                }`}
+                          {activeTab === 'MANUAL' && (
+                            <td className="py-3.5 px-6 text-right">
+                              <button
+                                onClick={() => handleRemoveHolding(h.symbol)}
+                                className="p-1.5 text-[#687A81] hover:text-[#BB4B48] rounded hover:bg-[#EEF2F2] transition-colors"
+                                aria-label={`Remove ${h.symbol}`}
                               >
-                                {isPos ? '+' : '−'}₹{formatNumber(Math.abs(pos.pnl))} ({isPos ? '+' : ''}
-                                {pos.pnl_pct?.toFixed(2)}%)
-                              </span>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
-            )}
-          </Card>
-        </div>
-      )}
+            </section>
 
-      {/* VIEW 3: BROKER LIVE ACCOUNT */}
-      {activeAccountTab === 'BROKER' && (
-        <Card className="p-8 text-center space-y-4">
-          <ShieldCheck className="w-12 h-12 mx-auto text-indigo-600 dark:text-indigo-400" />
-          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-            Zerodha Kite Broker Connection
-          </h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Live broker trading requires an authenticated Zerodha Kite session with server-side API keys and token
-            exchange.
-          </p>
-          <div className="pt-2">
-            <Link href="/settings">
-              <Button variant="outline" size="md">
-                Manage Broker Connection in Settings →
-              </Button>
-            </Link>
+            {/* Sector Exposure Aside */}
+            <aside className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 space-y-4">
+              <div>
+                <h2 className="text-[20px] font-semibold text-[#142B32]">Sector exposure</h2>
+                <p className="text-xs text-[#687A81] mt-0.5">By current portfolio value</p>
+              </div>
+
+              {/* Allocation Color Bar */}
+              <div className="h-3 flex rounded-[4px] overflow-hidden my-4 bg-[#EEF2F2]">
+                {Object.entries(sectors).map(([sec, val], idx) => {
+                  const pct = totalCurrentValue > 0 ? (val / totalCurrentValue) * 100 : 0;
+                  const colors = ['#087F73', '#406282', '#987433', '#8F6A24', '#687A81'];
+                  return (
+                    <span
+                      key={sec}
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: colors[idx % colors.length],
+                      }}
+                      title={`${sec}: ${pct.toFixed(1)}%`}
+                    />
+                  );
+                })}
+              </div>
+
+              {/* Allocation List */}
+              <div className="divide-y divide-[#E1E7E8] text-xs">
+                {Object.entries(sectors).map(([sec, val]) => {
+                  const pct = totalCurrentValue > 0 ? (val / totalCurrentValue) * 100 : 0;
+                  return (
+                    <div key={sec} className="py-2.5 flex items-center justify-between">
+                      <span className="text-[#687A81]">{sec}</span>
+                      <strong className="font-mono text-[#142B32]">{pct.toFixed(1)}%</strong>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="pt-3 border-t border-[#E1E7E8]">
+                <Link
+                  href="/portfolio/risk"
+                  className="text-xs font-semibold text-[#087F73] hover:underline block"
+                >
+                  View full concentration & heat analysis →
+                </Link>
+              </div>
+            </aside>
           </div>
-        </Card>
+        </>
       )}
     </div>
   );

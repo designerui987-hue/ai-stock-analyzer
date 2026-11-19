@@ -2,55 +2,35 @@
 
 import React, { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOut, Search, Sun, Moon, Command } from 'lucide-react';
+import { Search, Bell, Menu, Command } from 'lucide-react';
 import { CommandPalette } from '@/components/ui/CommandPalette';
 import { evaluateNseSession } from '@/lib/orders/execution';
-import { useAuth } from '@/store/useAuth';
 
-const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
-  '/dashboard': { title: 'Dashboard', sub: 'Institutional portfolio performance and AI signals' },
-  '/portfolio': { title: 'Portfolio Management', sub: 'Asset allocation, holdings, and rebalancing recommendations' },
-  '/portfolio/risk': { title: 'Portfolio Risk & Exposure', sub: 'Position sizing, portfolio heat %, and sector concentration alerts' },
-  '/orders': { title: 'Orders', sub: 'Paper trades and Zerodha Kite orders' },
-  '/watchlist': { title: 'Watchlist', sub: 'Real-time stock monitoring & alert triggers' },
-  '/heatmap': { title: 'Market Heatmap', sub: 'Sector performance treemap & market cap visualization' },
-  '/insights': { title: 'AI Insights', sub: 'Daily multi-model ensemble market signals & anomaly alerts' },
-  '/performance': { title: 'Signal Performance Ledger', sub: 'Auditable track record of every AI signal issued with model factors' },
-  '/assistant': { title: 'AI Copilot', sub: 'Interactive conversational stock analysis & reasoning' },
-  '/settings': { title: 'Platform Settings', sub: 'Manage API credentials, alert delivery channels, and risk rules' },
+const PAGE_BREADCRUMBS: Record<string, string> = {
+  '/dashboard': 'Today',
+  '/': 'Today',
+  '/stocks': 'Explore',
+  '/watchlist': 'Watchlist',
+  '/portfolio': 'Portfolio',
+  '/portfolio/risk': 'Portfolio / Risk & Context',
+  '/orders': 'Portfolio / Orders',
+  '/heatmap': 'Explore / Heatmap',
+  '/backtest': 'Explore / Backtesting',
+  '/performance': 'Explore / Signal Ledger',
+  '/settings': 'Settings',
+  '/data-sources': 'Settings / Data Sources',
+  '/assistant': 'Research Assistant',
 };
 
-export default function Header() {
+export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
-  const logout = useAuth((state) => state.logout);
   const [cmdOpen, setCmdOpen] = useState(false);
-  // Default to Day Mode (Light Mode)
-  const [isDarkMode, setIsDarkMode] = useState(false);
 
   const isStock = pathname.startsWith('/stocks/');
-  const sym = isStock ? pathname.split('/')[2]?.toUpperCase() : null;
-  const meta =
-    PAGE_TITLES[pathname] ||
-    (isStock && sym
-      ? { title: `${sym} Analysis`, sub: 'NSE stock research' }
-      : { title: 'StockAI Platform', sub: 'AI Market Intelligence' });
+  const symbol = isStock ? pathname.split('/')[2]?.toUpperCase() : null;
 
-  const toggleTheme = () => {
-    const nextDark = !isDarkMode;
-    setIsDarkMode(nextDark);
-    if (typeof document !== 'undefined') {
-      if (nextDark) {
-        document.documentElement.classList.add('dark');
-        document.body.style.background = '#0B0F17';
-        document.body.style.color = '#F8FAFC';
-      } else {
-        document.documentElement.classList.remove('dark');
-        document.body.style.background = '#F8FAFC';
-        document.body.style.color = '#111827';
-      }
-    }
-  };
+  let currentTitle = PAGE_BREADCRUMBS[pathname] || (isStock && symbol ? `Stock Research / ${symbol}` : 'Today');
 
   const [marketStatus, setMarketStatus] = useState<{
     open: boolean;
@@ -107,7 +87,7 @@ export default function Header() {
           }
         }
       } catch {
-        // Fallback to local evaluateNseSession
+        // Fallback
       }
 
       setMarketStatus({
@@ -124,79 +104,74 @@ export default function Header() {
 
   return (
     <>
-      <header className="h-16 flex items-center justify-between gap-3 px-4 sm:px-6 shrink-0 sticky top-0 z-30 bg-white/90 dark:bg-[#0B0F17]/90 backdrop-blur-md border-b border-slate-200 dark:border-white/[0.06] transition-colors">
-        {/* Page Title & Subtitle */}
-        <div className="flex items-center space-x-4 min-w-0">
-          <div className="min-w-0">
-            <h1 className="text-base font-semibold text-slate-900 dark:text-slate-100 truncate leading-tight">
-              {meta.title}
-            </h1>
-            <p className="text-caption text-slate-500 dark:text-slate-400 truncate">
-              {meta.sub}
-            </p>
-          </div>
+      <header className="h-[74px] px-6 md:px-9 flex items-center justify-between gap-4 shrink-0 sticky top-0 z-30 bg-white border-b border-[#E1E7E8]">
+        {/* Mobile menu button */}
+        <button
+          onClick={onMenuClick}
+          className="md:hidden p-2 -ml-2 text-[#687A81] hover:text-[#142B32] rounded-md hover:bg-[#EEF2F2]"
+          aria-label="Open navigation menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
 
+        {/* Breadcrumb */}
+        <div className="text-sm text-[#142B32] font-normal flex items-center gap-2 truncate">
+          <span className="text-[#687A81]">Workspace</span>
+          <span className="text-[#B6C2C6]">/</span>
+          <strong className="font-semibold text-[#142B32]">{currentTitle}</strong>
+        </div>
+
+        {/* Search, Session tag & Alerts */}
+        <div className="flex items-center gap-3 ml-auto">
+          {/* Quick search button */}
+          <button
+            onClick={() => setCmdOpen(true)}
+            aria-label="Search a company"
+            className="flex items-center gap-2 px-3 py-2 rounded-[8px] bg-white border border-[#E1E7E8] text-[#687A81] hover:border-[#CCD7D9] transition-all text-xs w-36 sm:w-56 lg:w-64"
+          >
+            <Search className="w-3.5 h-3.5 text-[#687A81] shrink-0" />
+            <span className="truncate text-left flex-1">Search a company</span>
+            <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono bg-[#EEF2F2] text-[#687A81] rounded border border-[#E1E7E8]">
+              ⌘ K
+            </kbd>
+          </button>
+
+          {/* Market Status Badge */}
           <div
-            className={`hidden md:inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-caption font-medium border ${
+            className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[4px] text-xs font-medium border ${
               marketStatus.open
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
+                ? 'bg-[#EAF2EC] text-[#087F73] border-[#D8E5DE]'
                 : marketStatus.session === 'PRE_OPEN'
-                ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-white/5'
+                ? 'bg-[#FAF3E5] text-[#8B734D] border-[#EEE2C6]'
+                : 'bg-[#EEF2F2] text-[#687A81] border-[#E1E7E8]'
             }`}
           >
             <span
               className={`w-1.5 h-1.5 rounded-full ${
                 marketStatus.open
-                  ? 'bg-emerald-500 animate-pulse'
+                  ? 'bg-[#087F73]'
                   : marketStatus.session === 'PRE_OPEN'
-                  ? 'bg-amber-500 animate-pulse'
-                  : 'bg-slate-400'
+                  ? 'bg-[#8B734D]'
+                  : 'bg-[#899DA3]'
               }`}
             />
             <span>{marketStatus.label}</span>
           </div>
-        </div>
 
-        {/* Search / Command Trigger & Utilities */}
-        <div className="flex items-center space-x-1.5 sm:space-x-3">
-          {/* Quick Command Trigger */}
+          {/* Alerts / Bell Button */}
           <button
-            onClick={() => setCmdOpen(true)}
-            aria-label="Search or jump to a page"
-            className="flex items-center space-x-2 px-3 py-1.5 rounded-input bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-white/[0.08] text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:border-slate-300 dark:hover:border-white/20 transition-all text-xs sm:w-48 lg:w-64"
+            onClick={() => router.push('/watchlist#alerts')}
+            className="p-2 text-[#687A81] hover:text-[#142B32] rounded-[8px] hover:bg-[#EEF2F2] transition-colors relative"
+            aria-label="Open alerts"
+            title="Price Alerts"
           >
-            <Search className="w-3.5 h-3.5" />
-            <span className="hidden sm:block flex-1 text-left truncate">Search or jump to...</span>
-            <kbd className="hidden sm:inline-flex items-center space-x-0.5 px-1.5 py-0.5 text-[10px] font-mono bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded border border-slate-200 dark:border-white/10 shadow-subtle">
-              <Command className="w-2.5 h-2.5" />
-              <span>K</span>
-            </kbd>
-          </button>
-
-          {/* Theme Switcher */}
-          <button
-            onClick={toggleTheme}
-            className="p-2 rounded-input text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors"
-            title={isDarkMode ? 'Switch to Day Mode' : 'Switch to Dark Mode'}
-          >
-            {isDarkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-slate-600" />}
-          </button>
-
-          <button
-            type="button"
-            aria-label="Sign out"
-            title="Sign out"
-            onClick={() => { logout(); router.replace('/login'); }}
-            className="p-2 rounded-input text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60"
-          >
-            <LogOut className="w-4 h-4" />
+            <Bell className="w-4 h-4" />
           </button>
         </div>
       </header>
 
-      {/* Command Palette Modal */}
-      <CommandPalette isOpen={cmdOpen} onClose={() => setCmdOpen(false)} onOpen={() => setCmdOpen(true)} />
+      {/* Cmd + K Command Palette */}
+      <CommandPalette isOpen={cmdOpen} onClose={() => setCmdOpen(false)} />
     </>
   );
 }

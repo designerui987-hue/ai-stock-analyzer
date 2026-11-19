@@ -71,36 +71,39 @@ export default function PortfolioRiskDashboard() {
 
   if (!hasRealHoldings && !isDemoMode) {
     return (
-      <div className="max-w-4xl mx-auto space-y-6 py-8 animate-fade-in">
+      <div className="space-y-6 animate-fade-in">
         <div>
-          <h1 className="text-display font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <ShieldAlert className="text-indigo-600 dark:text-indigo-400" /> Portfolio Risk Dashboard
+          <div className="eyebrow text-[#687A81] mb-2">RISK & EXPOSURE TELEMETRY</div>
+          <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+            Portfolio Risk Context.
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-sm text-[#687A81] mt-1.5">
             Real-time portfolio heat, drawdown protection, and sector concentration risk telemetry.
           </p>
         </div>
-        <Card className="p-8 space-y-4 border-slate-200 dark:border-white/[0.08]">
-          <div className="flex items-center space-x-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm">
+        <div className="bg-white border border-[#E1E7E8] rounded-[14px] p-8 space-y-4">
+          <div className="flex items-center space-x-2 text-[#087F73] font-semibold text-sm">
             <Info className="w-5 h-5" />
             <span>No Active Holdings in Portfolio</span>
           </div>
-          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+          <p className="text-xs text-[#687A81] leading-relaxed">
             In accordance with our strict data integrity policy, synthetic portfolio risk calculations are never shown with placeholder fixtures. To view live portfolio heat and open risk calculations, add positions to your database Portfolio or connect your Zerodha Kite broker account.
           </p>
           <div className="pt-3 flex flex-wrap gap-3">
-            <Link href="/portfolio">
-              <Button variant="primary" size="sm">
-                Open Portfolio Manager →
-              </Button>
+            <Link
+              href="/portfolio"
+              className="px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[8px] text-xs font-semibold"
+            >
+              Open Portfolio Manager →
             </Link>
-            <Link href="/settings">
-              <Button variant="outline" size="sm">
-                Connect Zerodha Kite in Settings
-              </Button>
+            <Link
+              href="/settings"
+              className="px-4 py-2 bg-white border border-[#E1E7E8] hover:bg-[#EEF2F2] text-[#142B32] rounded-[8px] text-xs font-semibold"
+            >
+              Connect Zerodha Kite in Settings
             </Link>
           </div>
-        </Card>
+        </div>
       </div>
     );
   }

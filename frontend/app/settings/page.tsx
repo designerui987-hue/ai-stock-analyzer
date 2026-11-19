@@ -211,23 +211,24 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+    <div className="space-y-6 animate-fade-in max-w-4xl">
       {/* Top Header */}
       <div>
-        <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-          Account & Platform Settings
-        </h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Manage system configurations, API credentials, and notification thresholds
+        <div className="eyebrow text-[#687A81] mb-2">PLATFORM & PREFERENCES</div>
+        <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+          Settings.
+        </h1>
+        <p className="text-sm text-[#687A81] mt-1.5">
+          Workspace preferences, alert delivery channels, risk limits, and broker connections.
         </p>
       </div>
 
       {/* Preferences Section */}
       <Card size="large" className="space-y-6">
-        <div className="flex items-center space-x-2 border-b border-slate-100 dark:border-white/[0.06] pb-4">
-          <Settings className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-            System Preferences
+        <div className="flex items-center space-x-2 border-b border-[#E1E7E8] pb-4">
+          <Settings className="w-4 h-4 text-[#087F73]" />
+          <h3 className="text-sm font-semibold text-[#142B32]">
+            Workspace Preferences
           </h3>
         </div>
 

@@ -22,17 +22,17 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
     ref
   ) => {
     const baseStyles =
-      'bg-white dark:bg-[#121826] border border-slate-200 dark:border-white/[0.06] transition-all duration-200 ease-out';
+      'bg-white border border-[#E1E7E8] transition-all duration-200 ease-out';
 
     const radiusStyles = {
-      standard: 'rounded-card',
-      large: 'rounded-card-lg',
+      standard: 'rounded-[14px]',
+      large: 'rounded-[16px]',
     };
 
     const paddingStyles = noPadding ? '' : 'p-6';
 
     const interactiveStyles = interactive
-      ? 'hover:-translate-y-[2px] hover:border-slate-300 dark:hover:border-white/[0.12] hover:shadow-subtle dark:hover:shadow-dark-subtle cursor-pointer'
+      ? 'hover:-translate-y-[1px] hover:border-[#CCD7D9] hover:shadow-sm cursor-pointer'
       : '';
 
     return (

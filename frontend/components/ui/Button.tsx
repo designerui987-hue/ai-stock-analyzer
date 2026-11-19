@@ -4,7 +4,7 @@ import React from 'react';
 import { clsx } from 'clsx';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger' | 'teal' | 'link';
   size?: 'sm' | 'md' | 'lg';
   icon?: React.ReactNode;
   iconPosition?: 'left' | 'right';
@@ -27,7 +27,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ref
   ) => {
     const baseStyles =
-      'inline-flex items-center justify-center font-medium rounded-btn transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/40 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none disabled:transform-none select-none';
+      'inline-flex items-center justify-center font-semibold rounded-[8px] transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[#087F73]/40 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none disabled:transform-none select-none';
 
     const sizeStyles = {
       sm: 'px-3 py-1.5 text-xs gap-1.5 h-8',
@@ -37,15 +37,19 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 
     const variantStyles = {
       primary:
-        'bg-indigo-600 hover:bg-indigo-700 text-white shadow-subtle dark:shadow-dark-subtle',
+        'bg-[#142B32] hover:bg-[#203c44] text-white border border-[#142B32] shadow-sm',
+      teal:
+        'bg-[#087F73] hover:bg-[#076f64] text-white border border-[#087F73] shadow-sm',
       secondary:
-        'bg-slate-100 hover:bg-slate-200 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100 border border-slate-200 dark:border-white/5',
+        'bg-white hover:bg-[#F0F5F3] text-[#142B32] border border-[#E1E7E8]',
       outline:
-        'bg-transparent hover:bg-slate-100 text-slate-700 dark:text-slate-200 dark:hover:bg-slate-800/60 border border-slate-200 dark:border-white/10',
+        'bg-transparent hover:bg-[#EEF2F2] text-[#142B32] border border-[#E1E7E8]',
       ghost:
-        'bg-transparent hover:bg-slate-100 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-slate-100',
+        'bg-transparent hover:bg-[#EEF2F2] text-[#687A81] hover:text-[#142B32]',
       danger:
-        'bg-red-600 hover:bg-red-700 text-white shadow-subtle dark:shadow-dark-subtle',
+        'bg-[#BB4B48] hover:bg-[#a6403d] text-white shadow-sm',
+      link:
+        'bg-transparent text-[#087F73] hover:underline p-0 h-auto font-medium',
     };
 
     return (

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -86,24 +87,30 @@ export default function BacktestPage() {
   const trades = result?.trades || [];
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in p-4 md:p-6">
+    <div className="space-y-6 animate-fade-in">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <BarChart2 className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-              Quantitative Backtesting Engine
+      <div className="space-y-3">
+        <Link
+          href="/stocks"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#687A81] hover:text-[#142B32] transition-colors"
+        >
+          ← Back to Explore
+        </Link>
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <div className="eyebrow text-[#687A81] mb-2">QUANTITATIVE SIMULATION</div>
+            <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+              Backtest Engine.
             </h1>
+            <p className="text-sm text-[#687A81] mt-1.5">
+              Walk-forward backtest of production deterministic rules vs NIFTY 50 benchmark. Includes STT, exchange fees, and execution slippage.
+            </p>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Walk-forward backtest of production deterministic rules (<code className="text-indigo-600 dark:text-indigo-400">v1.0-deterministic-quant</code>) vs NIFTY 50 benchmark. Includes Indian brokerage, STT, and slippage. Zero lookahead bias.
-          </p>
-        </div>
 
-        {/* Global Mandatory SEBI Disclaimer */}
-        <div className="px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-[11px] text-amber-700 dark:text-amber-300 font-medium max-w-md">
-          ⚠️ <strong>Regulatory Disclaimer:</strong> Backtested results are hypothetical simulations and not investment advice. Past performance is not indicative of future returns.
+          {/* Global Mandatory SEBI Disclaimer */}
+          <div className="p-3 bg-[#FAF3E5] border border-[#EEE2C6] rounded-[8px] text-[11px] text-[#8B734D] max-w-md">
+            ⚠️ <strong>Regulatory Disclaimer:</strong> Backtested results are hypothetical simulations and not investment advice. Past performance is not indicative of future returns.
+          </div>
         </div>
       </div>
 

@@ -2,7 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { AlertCircle, Clock, Database, RefreshCw } from 'lucide-react';
+import { AlertCircle, Clock, Database, RefreshCw, ArrowLeft, Info } from 'lucide-react';
+import { StockLogo } from '@/components/ui/StockLogo';
+import { formatINR, formatPercent } from '@/lib/format';
 import { DEMO_STOCKS } from '@/lib/data';
 
 function getDemoHeatmapData() {
@@ -98,189 +100,169 @@ export default function HeatmapPage() {
         }
       })
       .catch((err) => {
-        console.error('Heatmap fetch error:', err);
         if (isDemoAllowed) {
           setSectors(getDemoHeatmapData());
           setIsDemoData(true);
-          setSourceInfo('Demo Fixtures (Fallback)');
-          setAsOfInfo(new Date().toISOString());
         } else {
-          setError('Unable to load market heatmap data. Please try again.');
-          setSectors({});
+          setError(err?.message || 'Failed to fetch heatmap data.');
         }
       })
-      .finally(() => {
-        setLoading(false);
-      });
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchHeatmap();
   }, []);
 
-  const sectorKeys = Object.keys(sectors);
-  const displaySectors = selectedSector
+  const sectorNames = Object.keys(sectors);
+  const displayedSectors = selectedSector
     ? { [selectedSector]: sectors[selectedSector] }
     : sectors;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in pb-12">
-      {/* Top Header & Sector Filter */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-6 animate-fade-in">
+      {/* ── Breadcrumb & Page Intro ───────────────────────────────────── */}
+      <Link
+        href="/stocks"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-[#687A81] hover:text-[#142B32] transition-colors"
+      >
+        <ArrowLeft className="w-3.5 h-3.5" />
+        <span>Back to Explore</span>
+      </Link>
+
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-            Market Sector Heatmap
-          </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-2">
-            <span>Constituent performance grouped by industrial sector</span>
-            {asOfInfo && (
-              <span className="inline-flex items-center gap-1 text-caption text-slate-400">
-                <Clock className="w-3 h-3" />
-                {new Date(asOfInfo).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
-            <span className="inline-flex items-center gap-1 text-caption text-slate-400">
-              <Database className="w-3 h-3" />
-              {sourceInfo}
-            </span>
+          <div className="eyebrow text-[#687A81] mb-2">SECTOR RELATIVE STRENGTH</div>
+          <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+            Market Heatmap.
+          </h1>
+          <p className="text-sm text-[#687A81] mt-1.5">
+            Compare sector breadth and constituent performance across Indian equities.
           </p>
         </div>
 
-        {/* Refresh & Sector Filter Tabs */}
-        <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
+        <button
+          onClick={fetchHeatmap}
+          className="px-3 py-1.5 bg-white border border-[#E1E7E8] hover:bg-[#EEF2F2] rounded-[7px] text-xs font-semibold text-[#142B32] flex items-center gap-1.5 self-start sm:self-auto"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      {/* ── Coverage & Methodology Explainer Banner ───────────────────── */}
+      <div className="p-4 bg-white border border-[#E1E7E8] rounded-[10px] text-xs text-[#687A81] space-y-1">
+        <div className="flex items-center gap-1.5 font-semibold text-[#142B32]">
+          <Info className="w-3.5 h-3.5 text-[#087F73]" />
+          <span>Coverage Scope & Colour Scale</span>
+        </div>
+        <p className="leading-relaxed">
+          Covers tracked NSE large and mid-cap constituent equities (not the entire exchange). Green tiles represent positive daily change; red represents negative daily change. Darker shading reflects greater percentage movement.
+        </p>
+      </div>
+
+      {/* ── Sector Filter Chips ────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter sectors">
+        <button
+          onClick={() => setSelectedSector(null)}
+          className={`px-3 py-1.5 rounded-[6px] text-xs font-semibold border transition-all ${
+            selectedSector === null
+              ? 'bg-[#142B32] text-white border-[#142B32]'
+              : 'bg-white text-[#687A81] border-[#E1E7E8] hover:text-[#142B32]'
+          }`}
+        >
+          All Sectors ({sectorNames.length})
+        </button>
+        {sectorNames.map((sec) => (
           <button
-            onClick={fetchHeatmap}
-            title="Refresh Heatmap"
-            className="p-1.5 rounded-btn bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900 shrink-0"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
-          </button>
-          <button
-            onClick={() => setSelectedSector(null)}
-            className={`px-3 py-1.5 rounded-btn text-xs font-medium shrink-0 transition-colors ${
-              selectedSector === null
-                ? 'bg-indigo-600 text-white shadow-subtle'
-                : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900'
+            key={sec}
+            onClick={() => setSelectedSector(sec)}
+            className={`px-3 py-1.5 rounded-[6px] text-xs font-semibold border transition-all ${
+              selectedSector === sec
+                ? 'bg-[#142B32] text-white border-[#142B32]'
+                : 'bg-white text-[#687A81] border-[#E1E7E8] hover:text-[#142B32]'
             }`}
           >
-            All Sectors
+            {sec}
           </button>
-          {sectorKeys.map((sec) => (
-            <button
-              key={sec}
-              onClick={() => setSelectedSector(sec)}
-              className={`px-3 py-1.5 rounded-btn text-xs font-medium shrink-0 transition-colors ${
-                selectedSector === sec
-                  ? 'bg-indigo-600 text-white shadow-subtle'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-slate-400 hover:text-slate-900'
-              }`}
-            >
-              {sec} ({sectors[sec]?.length ?? 0})
-            </button>
-          ))}
-        </div>
+        ))}
       </div>
 
-      {/* Demo Data Banner when active */}
-      {isDemoData && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-card p-3 flex items-center justify-between text-xs text-amber-900 dark:text-amber-200">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span className="font-semibold">DEMO DATA MODE:</span>
-            <span>Displaying simulated constituents. Real quotes are unavailable for live rendering.</span>
-          </div>
-          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-[10px] font-bold uppercase tracking-wider">
-            DEMO
-          </span>
+      {/* ── Error Banner ────────────────────────────────────────────────── */}
+      {error && (
+        <div className="p-4 bg-[#FAF3E5] border border-[#EEE2C6] rounded-[10px] text-xs text-[#8B734D] flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
         </div>
       )}
 
-      {/* Loading Skeleton */}
-      {loading && Object.keys(sectors).length === 0 && (
-        <div className="flex flex-col items-center justify-center p-12 space-y-3 bg-white dark:bg-slate-900/40 rounded-card border border-slate-200 dark:border-white/[0.06]">
-          <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
-          <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Loading sector constituent quotes…</p>
+      {/* ── Heatmap Grid ────────────────────────────────────────────────── */}
+      {loading ? (
+        <div className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center text-xs text-[#687A81]">
+          Loading sector performance treemap...
         </div>
-      )}
+      ) : (
+        <div className="space-y-6">
+          {Object.entries(displayedSectors).map(([sectorName, stockItems]) => {
+            if (!stockItems || stockItems.length === 0) return null;
+            return (
+              <section
+                key={sectorName}
+                className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 space-y-4"
+              >
+                <div className="flex items-center justify-between border-b border-[#E1E7E8] pb-3">
+                  <h3 className="text-base font-semibold text-[#142B32]">{sectorName}</h3>
+                  <span className="text-xs text-[#687A81]">{stockItems.length} constituents</span>
+                </div>
 
-      {/* Error / Unavailable State */}
-      {!loading && error && (
-        <div className="p-8 text-center bg-slate-50 dark:bg-slate-900/40 rounded-card border border-slate-200 dark:border-white/[0.06] space-y-3">
-          <AlertCircle className="w-8 h-8 text-slate-400 mx-auto" />
-          <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{error}</p>
-          <button
-            onClick={fetchHeatmap}
-            className="px-4 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded transition-colors"
-          >
-            Retry Fetch
-          </button>
-        </div>
-      )}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                  {stockItems.map((s: any) => {
+                    const chg = s.change_pct ?? 0;
+                    const isPositive = chg >= 0;
 
-      {/* Main Heatmap Grid */}
-      <div className="space-y-6">
-        {Object.entries(displaySectors).map(([sectorName, stocks]) => {
-          if (!Array.isArray(stocks) || stocks.length === 0) return null;
-          return (
-            <div key={sectorName} className="space-y-3">
-              <div className="flex items-center justify-between px-1">
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  {sectorName}
-                </h3>
-                <span className="text-caption text-slate-500">{stocks.length} Companies</span>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                {stocks.map((s) => {
-                  const isUp = typeof s.change_pct === 'number' ? s.change_pct >= 0 : true;
-                  return (
-                    <Link key={s.symbol} href={`/stocks/${s.symbol}`}>
-                      <div
-                        className={`p-4 rounded-card flex flex-col justify-between h-28 border cursor-pointer transition-all duration-200 hover:-translate-y-[2px] ${
-                          isUp
-                            ? 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/15 hover:border-emerald-500/30'
-                            : 'bg-red-500/10 border-red-500/20 hover:bg-red-500/15 hover:border-red-500/30'
+                    return (
+                      <Link
+                        key={s.symbol}
+                        href={`/stocks/${s.symbol}`}
+                        className={`p-3.5 rounded-[10px] border transition-all hover:-translate-y-0.5 ${
+                          isPositive
+                            ? 'bg-[#EAF2EC] border-[#D8E5DE] hover:border-[#087F73]'
+                            : 'bg-[#FCEDEC] border-[#F5D3D2] hover:border-[#BB4B48]'
                         }`}
                       >
-                        <div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                              {s.symbol}
-                            </span>
-                            {s.demo && (
-                              <span className="text-[9px] px-1 bg-amber-500/20 text-amber-700 dark:text-amber-300 rounded font-bold">
-                                DEMO
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-[11px] text-slate-500 truncate mt-0.5">{s.name}</p>
-                        </div>
-
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                            {typeof s.price === 'number' && s.price > 0 ? `₹${s.price.toFixed(2)}` : '—'}
-                          </p>
-                          <p
-                            className={`text-xs font-semibold mt-0.5 ${
-                              isUp
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : 'text-red-600 dark:text-red-400'
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-xs text-[#142B32]">{s.symbol}</span>
+                          <span
+                            className={`text-xs font-mono font-semibold ${
+                              isPositive ? 'text-[#087F73]' : 'text-[#BB4B48]'
                             }`}
                           >
-                            {typeof s.change_pct === 'number'
-                              ? `${s.change_pct >= 0 ? '+' : ''}${s.change_pct.toFixed(2)}%`
-                              : '0.00%'}
-                          </p>
+                            {formatPercent(chg)}
+                          </span>
                         </div>
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+                        <div className="text-[11px] text-[#687A81] truncate mt-1">
+                          {s.name || s.symbol}
+                        </div>
+                        {typeof s.price === 'number' && (
+                          <div className="text-xs font-mono font-medium text-[#142B32] mt-1.5">
+                            {formatINR(s.price, 2)}
+                          </div>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Footer ──────────────────────────────────────────────────────── */}
+      <footer className="pt-4 border-t border-[#E1E7E8] flex items-center justify-between text-xs text-[#687A81]">
+        <span>Source: {sourceInfo}</span>
+        <span>{asOfInfo ? `As of ${new Date(asOfInfo).toLocaleTimeString('en-IN')}` : 'Market hours'}</span>
+      </footer>
     </div>
   );
 }

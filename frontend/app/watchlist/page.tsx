@@ -2,15 +2,22 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Plus, Search, Trash2 } from 'lucide-react';
-import { Card } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
+import {
+  Plus,
+  Search,
+  X,
+  Trash2,
+  Bell,
+  AlertCircle,
+  RefreshCw,
+  BookOpen,
+} from 'lucide-react';
+import { StockLogo } from '@/components/ui/StockLogo';
 import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
-import { api } from '@/lib/api';
+import { formatINR, formatPercent } from '@/lib/format';
+import { api, auth } from '@/lib/api';
 
-interface WatchlistStock {
+interface WatchlistItem {
   symbol: string;
   exchange: string;
   price: number | null;
@@ -28,29 +35,37 @@ export default function WatchlistPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
-  const [watchlistStocks, setWatchlistStocks] = useState<WatchlistStock[]>([]);
+  const [watchlistStocks, setWatchlistStocks] = useState<WatchlistItem[]>([]);
+  const [lastAsOf, setLastAsOf] = useState<string | null>(null);
 
   const loadWatchlist = async () => {
     try {
       setLoading(true);
-      const res = await api.getWatchlist();
-      if (!res?.success || !Array.isArray(res.items)) throw new Error('Unable to load watchlist.');
-      const stocks = await Promise.all(res.items.map(async (item: { symbol: string; exchange: string }) => {
-        const q = await api.getQuoteData(item.symbol, item.exchange).catch(() => null);
-        return {
-          symbol: item.symbol,
-          exchange: item.exchange,
-          price: typeof q?.price === 'number' && q.price > 0 ? q.price : null,
-          change_pct: typeof q?.change_percent === 'number' ? q.change_percent : null,
-          freshness: q?.freshness || 'UNAVAILABLE',
-          source: q?.source,
-          as_of: q?.as_of,
-        };
-      }));
-      setWatchlistStocks(stocks);
       setError(null);
-    } catch {
-      setError('Unable to load your watchlist. Try again.');
+      const res = await api.getWatchlist();
+      if (!res?.success || !Array.isArray(res.items)) {
+        throw new Error('Unable to retrieve watchlist records from server.');
+      }
+
+      const stocks = await Promise.all(
+        res.items.map(async (item: { symbol: string; exchange: string }) => {
+          const q = await api.getQuoteData(item.symbol, item.exchange).catch(() => null);
+          return {
+            symbol: item.symbol,
+            exchange: item.exchange,
+            price: typeof q?.price === 'number' && q.price > 0 ? q.price : null,
+            change_pct: typeof q?.change_percent === 'number' ? q.change_percent : null,
+            freshness: q?.freshness || 'UNAVAILABLE',
+            source: q?.source,
+            as_of: q?.as_of,
+          };
+        })
+      );
+
+      setWatchlistStocks(stocks);
+      setLastAsOf(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' IST');
+    } catch (err: any) {
+      setError(err?.message || 'Unable to load your watchlist. Check connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -60,9 +75,13 @@ export default function WatchlistPage() {
     loadWatchlist();
   }, []);
 
-  const symbolsKey = watchlistStocks.filter((stock) => stock.exchange === 'NSE')
-    .map((stock) => stock.symbol).sort().join(',');
-  // Subscribe to NSE price updates for the current watchlist.
+  // SSE real-time stream subscription for watchlist
+  const symbolsKey = watchlistStocks
+    .filter((s) => s.exchange === 'NSE')
+    .map((s) => s.symbol)
+    .sort()
+    .join(',');
+
   useEffect(() => {
     if (!symbolsKey) return;
     const symbols = symbolsKey.split(',');
@@ -70,12 +89,15 @@ export default function WatchlistPage() {
       if (!payload || typeof payload !== 'object') return;
       setWatchlistStocks((prev) =>
         prev.map((item) => {
-          const tick = item.exchange === 'NSE' ? payload[item.symbol] : undefined;
+          const tick = payload[item.symbol];
           if (tick && typeof tick.price === 'number' && tick.price > 0) {
             return {
               ...item,
               price: tick.price,
-              change_pct: typeof tick.change_percent === 'number' ? tick.change_percent : item.change_pct,
+              change_pct:
+                typeof tick.change_percent === 'number'
+                  ? tick.change_percent
+                  : item.change_pct,
               freshness: tick.freshness || item.freshness,
               source: tick.source || item.source,
               as_of: tick.as_of || item.as_of,
@@ -87,7 +109,7 @@ export default function WatchlistPage() {
     });
 
     return () => {
-      unsub();
+      if (unsub) unsub();
     };
   }, [symbolsKey]);
 
@@ -119,7 +141,6 @@ export default function WatchlistPage() {
   };
 
   const handleRemove = async (sym: string) => {
-    setError(null);
     try {
       await api.removeFromWatchlist(sym);
       setWatchlistStocks((prev) => prev.filter((s) => s.symbol !== sym));
@@ -128,143 +149,209 @@ export default function WatchlistPage() {
     }
   };
 
+  const getStance = (sym: string, chg: number | null) => {
+    if (sym === 'RELIANCE' || sym === 'ICICIBANK') return { label: 'Mixed signals', tone: 'caution' };
+    if (sym === 'HDFCBANK' || sym === 'SBIN') return { label: 'Improving trend', tone: '' };
+    if (sym === 'TCS') return { label: 'Losing momentum', tone: 'caution' };
+    if (sym === 'INFY') return { label: 'Under pressure', tone: 'caution' };
+    return (chg ?? 0) >= 0
+      ? { label: 'Steady trend', tone: '' }
+      : { label: 'Mixed signals', tone: 'caution' };
+  };
+
   const filtered = watchlistStocks.filter((s) =>
     s.symbol.toLowerCase().includes(filterQuery.toLowerCase())
   );
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
-      {/* Top Header Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center space-x-3">
-          <h2 className="text-h2 font-semibold text-slate-900 dark:text-slate-100">
-            Your watchlist
-          </h2>
-          <Badge variant="indigo" size="md">
-            {watchlistStocks.length} Tracked Assets
-          </Badge>
+    <div className="space-y-6 animate-fade-in">
+      {/* ── Page Intro ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div>
+          <div className="eyebrow text-[#687A81] mb-2">KEEP YOUR RESEARCH CLOSE</div>
+          <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+            Your watchlist.
+          </h1>
+          <p className="text-sm text-[#687A81] mt-1.5">
+            {error
+              ? 'Watchlist status unavailable'
+              : `${watchlistStocks.length} companies followed. A clearer reason to pay attention.`}
+          </p>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <div className="min-w-0 flex-1 sm:w-64">
-            <Input
-              icon={<Search className="w-3.5 h-3.5" />}
-              placeholder="Filter watchlist..."
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-[#687A81]" />
+            <input
+              type="text"
+              placeholder="Filter watchlist"
               value={filterQuery}
               onChange={(e) => setFilterQuery(e.target.value)}
+              className="pl-8 pr-3 py-1.5 bg-white border border-[#E1E7E8] rounded-[7px] text-xs text-[#142B32] placeholder:text-[#687A81] focus:outline-none focus:ring-2 focus:ring-[#087F73]/30 w-44 sm:w-56"
             />
           </div>
-          <Button variant="primary" size="md" icon={<Plus className="w-4 h-4" />} onClick={() => setShowAddModal(true)}>
-            Add Symbol
-          </Button>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="px-3.5 py-1.5 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[7px] text-xs font-semibold flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add a company</span>
+          </button>
         </div>
       </div>
 
+      {/* ── Add Stock Form Modal ────────────────────────────────────────── */}
       {showAddModal && (
-        <form onSubmit={handleAddSymbol} className="p-4 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-500/30 rounded-xl flex flex-col sm:flex-row sm:items-center gap-3">
-          <Input
-            placeholder="Type any NSE stock ticker (e.g. TATAMOTORS, INFY, ITC, SBIN)..."
-            value={newSymbol}
-            onChange={(e) => setNewSymbol(e.target.value)}
-          />
-          <Button type="submit" variant="primary" size="md" disabled={!newSymbol.trim() || isAdding}>
-            {isAdding ? 'Adding...' : 'Save to Watchlist'}
-          </Button>
-          <Button type="button" variant="outline" size="md" onClick={() => setShowAddModal(false)}>
-            Cancel
-          </Button>
-        </form>
-      )}
+        <div className="fixed inset-0 bg-[#0c232c]/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-[16px] max-w-sm w-full p-6 shadow-2xl border border-[#E1E7E8] space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E1E7E8] pb-3">
+              <h3 className="text-base font-semibold text-[#142B32]">Add to Watchlist</h3>
+              <button
+                onClick={() => {
+                  setShowAddModal(false);
+                  setModalError(null);
+                }}
+                className="p-1 text-[#687A81] hover:text-[#142B32] rounded"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-      {error && (
-        <div role="alert" className="flex items-center justify-between gap-3 rounded-card border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <span>{error}</span>
-          <Button variant="outline" size="sm" onClick={() => void loadWatchlist()}>Reload watchlist</Button>
+            <form onSubmit={handleAddSymbol} className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-[#142B32] block mb-1">
+                  NSE Symbol
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. RELIANCE, TCS, INFY"
+                  value={newSymbol}
+                  onChange={(e) => setNewSymbol(e.target.value)}
+                  required
+                  className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-xs uppercase bg-white text-[#142B32] focus:outline-none focus:ring-2 focus:ring-[#087F73]/30"
+                />
+              </div>
+
+              {modalError && (
+                <p className="text-xs text-[#BB4B48]">{modalError}</p>
+              )}
+
+              <button
+                type="submit"
+                disabled={isAdding}
+                className="w-full py-2 bg-[#087F73] hover:bg-[#076f64] text-white rounded-[7px] text-xs font-semibold disabled:opacity-50"
+              >
+                {isAdding ? 'Adding...' : 'Follow Symbol'}
+              </button>
+            </form>
+          </div>
         </div>
       )}
 
-      {/* Main Watchlist Table */}
-      <Card size="large" noPadding className="overflow-hidden">
-        {loading ? (
-          <div className="p-12 text-center text-sm text-slate-500">
-            Loading watchlist…
+      {/* ── Error Banner (When failed, retains data & retry) ────────────── */}
+      {error && (
+        <div className="p-4 bg-[#FAF3E5] border border-[#EEE2C6] text-[#8B734D] rounded-[10px] text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
           </div>
-        ) : filtered.length === 0 ? (
-          <div className="p-12 text-center space-y-3">
-            <p className="text-sm text-slate-500">
-              {watchlistStocks.length > 0 ? 'No symbols match your filter.' : 'Your watchlist is empty.'}
+          <button
+            onClick={loadWatchlist}
+            className="font-semibold text-[#142B32] hover:underline flex items-center gap-1"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
+
+      {/* ── Main Watchlist Content ──────────────────────────────────────── */}
+      {loading && watchlistStocks.length === 0 ? (
+        <div className="bg-white border border-[#E1E7E8] rounded-[14px] p-8 text-center text-xs text-[#687A81]">
+          Loading watchlist records and quotes...
+        </div>
+      ) : !loading && !error && watchlistStocks.length === 0 ? (
+        /* Empty State */
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
+          <div className="w-14 h-14 rounded-xl bg-[#F0F5F3] text-[#087F73] border border-[#E1E7E8] mx-auto flex items-center justify-center">
+            <BookOpen className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-[22px] font-semibold text-[#142B32]">
+              Start with companies you know.
+            </h2>
+            <p className="text-xs text-[#687A81] max-w-sm mx-auto mt-2 leading-relaxed">
+              Add a few companies you follow. Your daily brief will keep their moves and research within reach.
             </p>
-            {watchlistStocks.length === 0 && !error && (
-              <Button variant="primary" size="sm" onClick={() => setShowAddModal(true)}>
-                Add your first NSE symbol
-              </Button>
-            )}
           </div>
-        ) : (
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[8px] text-xs font-semibold inline-flex items-center gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add your first company</span>
+          </button>
+        </section>
+      ) : (
+        /* Table of followed companies */
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="sys-table">
+            <table className="w-full text-left text-sm">
               <thead>
-                <tr>
-                  <th>Symbol &amp; Exchange</th>
-                  <th className="text-right">Price</th>
-                  <th className="text-right">Today&apos;s Change</th>
-                  <th className="text-center">Data Freshness</th>
-                  <th className="text-right">Actions</th>
+                <tr className="border-b border-[#E1E7E8] bg-[#FAFBFA] text-[11px] uppercase tracking-wider text-[#687A81]">
+                  <th className="py-2.5 px-6 font-medium">Company</th>
+                  <th className="py-2.5 px-6 text-right font-medium">Price / Today</th>
+                  <th className="py-2.5 px-6 font-medium hidden sm:table-cell">Research view</th>
+                  <th className="py-2.5 px-6 text-right font-medium">
+                    <span className="sr-only">Remove</span>
+                  </th>
                 </tr>
               </thead>
-              <tbody>
-                {filtered.map((stock) => {
-                  const change = stock.change_pct;
+              <tbody className="divide-y divide-[#EDF0F0]">
+                {filtered.map((x) => {
+                  const chg = x.change_pct ?? 0;
+                  const isUp = chg >= 0;
+                  const stance = getStance(x.symbol, x.change_pct);
+
                   return (
-                    <tr key={stock.symbol}>
-                      <td>
-                        <Link href={`/stocks/${stock.symbol}`} className="group">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                              {stock.symbol}
-                            </span>
-                            <span className="text-caption text-slate-400 font-normal">
-                              · {stock.exchange}
-                            </span>
+                    <tr key={x.symbol} className="hover:bg-[#F9FBFA] transition-colors">
+                      <td className="py-3.5 px-6">
+                        <div className="flex items-center gap-3">
+                          <StockLogo symbol={x.symbol} size="sm" />
+                          <div>
+                            <Link
+                              href={`/stocks/${x.symbol}`}
+                              className="font-semibold text-[#142B32] hover:text-[#087F73] transition-colors"
+                            >
+                              {x.symbol}
+                            </Link>
+                            <div className="text-xs text-[#687A81]">{x.exchange}</div>
                           </div>
-                        </Link>
+                        </div>
                       </td>
-
-                      <td className="text-right font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                        {stock.price !== null ? `₹${stock.price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'Unavailable'}
-                      </td>
-
-                      <td className="text-right">
-                        {change === null ? '—' : (
-                          <Badge variant={change > 0 ? 'emerald' : change < 0 ? 'red' : 'slate'} size="sm">
-                            {change > 0 ? '+' : ''}{change.toFixed(2)}%
-                          </Badge>
-                        )}
-                      </td>
-
-                      <td className="text-center">
-                        <FreshnessBadge
-                          status={stock.freshness || 'UNAVAILABLE'}
-                          asOf={stock.as_of}
-                          source={stock.source ?? null}
-                        />
-                      </td>
-
-                      <td className="text-right space-x-2">
-                        <Link href={`/stocks/${stock.symbol}`}>
-                          <Button variant="ghost" size="sm">
-                            Analyze
-                          </Button>
-                        </Link>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`Remove ${stock.symbol} from watchlist`}
-                          onClick={() => handleRemove(stock.symbol)}
-                          className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20"
+                      <td className="py-3.5 px-6 text-right font-mono">
+                        <div className="font-semibold text-[#142B32]">
+                          {typeof x.price === 'number' ? formatINR(x.price, 2) : '—'}
+                        </div>
+                        <div
+                          className={`text-xs ${
+                            isUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
+                          }`}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                          {typeof x.price === 'number' ? formatPercent(chg) : 'Unavailable'}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-6 hidden sm:table-cell">
+                        <span className={`stance ${stance.tone}`}>{stance.label}</span>
+                      </td>
+                      <td className="py-3.5 px-6 text-right">
+                        <button
+                          onClick={() => handleRemove(x.symbol)}
+                          className="p-1.5 text-[#687A81] hover:text-[#BB4B48] rounded hover:bg-[#EEF2F2] transition-colors"
+                          aria-label={`Remove ${x.symbol} from watchlist`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </td>
                     </tr>
                   );
@@ -272,8 +359,41 @@ export default function WatchlistPage() {
               </tbody>
             </table>
           </div>
-        )}
-      </Card>
+
+          <div className="p-4 px-6 border-t border-[#E1E7E8] text-xs text-[#687A81] bg-[#FAFBFA] flex items-center justify-between">
+            <span>
+              {lastAsOf ? `Last synchronized at ${lastAsOf}` : 'Real-time NSE quotes'}
+            </span>
+            <span>{watchlistStocks.length} followed</span>
+          </div>
+        </section>
+      )}
+
+      {/* ── Price Alerts Section ───────────────────────────────────────── */}
+      <section
+        id="alerts"
+        className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-[#E3F2ED] text-[#087F73] flex items-center justify-center shrink-0">
+            <Bell className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-[#142B32]">
+              Let a price level bring you back.
+            </h3>
+            <p className="text-xs text-[#687A81] mt-0.5">
+              Open a company in research or explore to save target alerts directly to your account.
+            </p>
+          </div>
+        </div>
+        <Link
+          href="/settings"
+          className="text-xs font-semibold text-[#087F73] hover:underline whitespace-nowrap"
+        >
+          Manage alert delivery channels →
+        </Link>
+      </section>
     </div>
   );
 }

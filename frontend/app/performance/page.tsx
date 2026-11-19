@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -104,13 +105,20 @@ export default function PerformanceLedger() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in pb-12">
+    <div className="space-y-6 animate-fade-in">
       {/* Header */}
-      <div>
-        <h1 className="text-display font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-3">
-          <Activity className="text-indigo-600" /> Signal Performance Ledger
+      <div className="space-y-2">
+        <Link
+          href="/stocks"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#687A81] hover:text-[#142B32] transition-colors"
+        >
+          ← Back to Explore
+        </Link>
+        <div className="eyebrow text-[#687A81]">AUDITABLE TRACK RECORD</div>
+        <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+          Signal Performance Ledger.
         </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 max-w-3xl">
+        <p className="text-sm text-[#687A81] mt-1.5 max-w-3xl">
           An auditable track record of deterministic quantitative signals. Realized P&L,
           Win Rate, and Max Drawdown are calculated strictly from closed positions resolved
           against real daily market bars.

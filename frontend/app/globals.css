@@ -6,26 +6,38 @@
 
 /* ── Design Tokens & System Theme ────────────────────────────────── */
 :root {
-  /* Light Theme (Default) */
-  --bg-main: #F8FAFC;
-  --bg-sidebar: #FFFFFF;
+  /* Approved StockAI Design Reference Tokens */
+  --ink: #142B32;
+  --muted: #687A81;
+  --line: #E1E7E8;
+  --canvas: #F5F7F7;
+  --teal: #087F73;
+  --teal-soft: #E3F2ED;
+  --red: #BB4B48;
+  --nav: #142C33;
+  --white: #FFFFFF;
+  --radius: 14px;
+
+  /* Theme mappings */
+  --bg-main: #F5F7F7;
+  --bg-sidebar: #142C33;
   --bg-card: #FFFFFF;
-  --bg-surface: #F1F5F9;
-  --bg-hover: #F1F5F9;
+  --bg-surface: #FFFFFF;
+  --bg-hover: #F0F4F4;
 
-  --border: #E5E7EB;
-  --border-muted: #F3F4F6;
-  --border-hover: #D1D5DB;
+  --border: #E1E7E8;
+  --border-muted: #EBF0F0;
+  --border-hover: #CCD7D9;
 
-  --text-primary: #111827;
-  --text-secondary: #475569;
-  --text-muted: #94A3B8;
+  --text-primary: #142B32;
+  --text-secondary: #687A81;
+  --text-muted: #687A81;
 
-  --accent-indigo: #6366F1;
-  --accent-blue: #3B82F6;
-  --accent-emerald: #10B981;
-  --accent-amber: #F59E0B;
-  --accent-red: #EF4444;
+  --accent-indigo: #087F73;
+  --accent-blue: #406282;
+  --accent-emerald: #087F73;
+  --accent-amber: #8F6A24;
+  --accent-red: #BB4B48;
 }
 
 .dark {
@@ -164,6 +176,90 @@ body {
     background-color: rgba(239, 68, 68, 0.1);
     color: #EF4444;
     border: 1px solid rgba(239, 68, 68, 0.2);
+  }
+
+  /* ── Concept Approved Component Classes ──────────────────────── */
+  .num, .mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.45px;
+    text-transform: uppercase;
+  }
+
+  .stock-logo {
+    width: 36px;
+    height: 36px;
+    background: #f0f3f5;
+    border: 1px solid #e4e8e9;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #4d6273;
+    flex-shrink: 0;
+  }
+  .stock-logo.blue { background: #eaf0f8; color: #406282; }
+  .stock-logo.gold { background: #f6f0e0; color: #987433; }
+  .stock-logo.red { background: #f8ebeb; color: #b54e54; }
+  .stock-logo.green { background: #e7f2eb; color: #43795f; }
+
+  .stance {
+    font-size: 12px;
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    color: #5f7278;
+  }
+  .stance::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #90ac9c;
+  }
+  .stance.caution::before {
+    background: #c8a05a;
+  }
+
+  .risk-box {
+    background: #faf3e5;
+    border: 1px solid #eee2c6;
+    border-radius: 10px;
+    padding: 18px;
+    font-size: 14px;
+  }
+
+  .risk-box p {
+    font-size: 13px;
+    color: #8b734d;
+    line-height: 1.7;
+    margin-top: 5px;
+  }
+
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: #0c232c35;
+    z-index: 80;
+  }
+
+  .drawer {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 420px;
+    max-width: 100%;
+    background: #fff;
+    z-index: 81;
+    box-shadow: -10px 0 50px #0a263c15;
+    display: flex;
+    flex-direction: column;
   }
 
   .badge-amber {

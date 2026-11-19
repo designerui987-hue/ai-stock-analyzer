@@ -2,20 +2,20 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { Send, Bot, ShieldCheck } from 'lucide-react';
-import { Badge } from '@/components/ui/Badge';
+import { Send, Bot, Sparkles, AlertCircle, ArrowLeft } from 'lucide-react';
 import { api, auth } from '@/lib/api';
 
 const DEFAULT_SUGGESTIONS = [
-  'Should I buy Reliance today?',
-  'Analyze TCS stock in detail',
-  'Top AI stock picks for today',
-  'Market overview',
+  'Explain the Reliance trend and momentum trade-off',
+  'Why are Indian IT stocks moving together?',
+  'What should I check before opening a position?',
+  'What are the primary risk factors for HDFC Bank?',
 ];
 
 interface Msg {
   role: 'user' | 'assistant';
   content: string;
+  type?: 'generated' | 'system';
 }
 
 export default function AssistantPage() {
@@ -23,7 +23,8 @@ export default function AssistantPage() {
     {
       role: 'assistant',
       content:
-        "Hello! I am your AI Market Assistant for Indian equities. Ask me about any NIFTY 50 stock, deterministic quantitative signals, or market overview.\n\n*Notice: All analytics provided are for educational purposes and do not constitute investment advice.*",
+        'Hello! I am your AI Market Research Companion for Indian equities. Ask me about any NSE company, recent momentum divergence, or quantitative rules.\n\nNotice: All observations are provided for research purposes and do not constitute investment advice.',
+      type: 'system',
     },
   ]);
   const [input, setInput] = useState('');
@@ -47,7 +48,8 @@ export default function AssistantPage() {
           ...m,
           {
             role: 'assistant',
-            content: '⚠️ Please sign in to communicate with the AI Market Assistant.',
+            content: 'Please sign in to communicate with your AI Market Assistant.',
+            type: 'system',
           },
         ]);
         return;
@@ -60,6 +62,7 @@ export default function AssistantPage() {
           {
             role: 'assistant',
             content: res.response,
+            type: 'generated',
           },
         ]);
         if (Array.isArray(res.suggestions) && res.suggestions.length > 0) {
@@ -70,16 +73,18 @@ export default function AssistantPage() {
           ...m,
           {
             role: 'assistant',
-            content: 'Received an empty response from market assistant service.',
+            content: 'Research assistant service returned an empty response. Please try again.',
+            type: 'system',
           },
         ]);
       }
-    } catch (err: any) {
+    } catch {
       setMsgs((m) => [
         ...m,
         {
           role: 'assistant',
           content: 'The assistant service is currently unavailable. Deterministic quantitative signals remain active on individual stock pages.',
+          type: 'system',
         },
       ]);
     } finally {
@@ -88,92 +93,106 @@ export default function AssistantPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto flex flex-col h-[calc(100vh-8rem)]">
-      {/* Header status bar */}
-      <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-white/[0.06] shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-btn bg-indigo-600 text-white flex items-center justify-center">
-            <Bot className="w-4 h-4" />
+    <div className="max-w-4xl mx-auto flex flex-col h-[calc(100vh-9rem)] space-y-4">
+      {/* ── Top Header ─────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between pb-3 border-b border-[#E1E7E8] shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-[8px] bg-[#E3F2ED] text-[#087F73] flex items-center justify-center">
+            <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              AI Market Copilot
-            </h2>
-            <p className="text-caption text-slate-500">Deterministic Quant Engine (v1.0)</p>
+            <h1 className="text-base font-semibold text-[#142B32]">Research Companion</h1>
+            <p className="text-xs text-[#687A81]">Contextual research assistant for NSE equities</p>
           </div>
         </div>
 
-        <Badge variant="indigo" size="sm">
-          Deterministic Signals v1.0
-        </Badge>
+        <Link
+          href="/stocks"
+          className="text-xs text-[#087F73] hover:underline flex items-center gap-1 font-semibold"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Explore Companies</span>
+        </Link>
       </div>
 
-      {/* Messages Stream */}
-      <div className="flex-1 overflow-y-auto py-6 space-y-6 pr-2">
+      {/* ── Messages Stream ────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto space-y-4 pr-1">
         {msgs.map((msg, i) => (
           <div
             key={i}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
           >
             <div
-              className={`max-w-[85%] space-y-3 ${
+              className={`max-w-[85%] p-4 rounded-[12px] text-xs md:text-sm leading-relaxed ${
                 msg.role === 'user'
-                  ? 'bg-indigo-600 text-white p-4 rounded-card-lg rounded-tr-none shadow-subtle'
-                  : 'bg-white dark:bg-[#121826] border border-slate-200 dark:border-white/[0.06] p-5 rounded-card-lg rounded-tl-none shadow-subtle text-slate-900 dark:text-slate-100'
+                  ? 'bg-[#142B32] text-white rounded-tr-none'
+                  : msg.type === 'system'
+                  ? 'bg-[#FAF3E5] border border-[#EEE2C6] text-[#8B734D] rounded-tl-none'
+                  : 'bg-white border border-[#E1E7E8] text-[#142B32] rounded-tl-none shadow-sm'
               }`}
             >
-              <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
+              {msg.type === 'generated' && (
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#087F73] mb-1.5">
+                  <Bot className="w-3.5 h-3.5" />
+                  <span>Market Intelligence</span>
+                </div>
+              )}
+              <div className="whitespace-pre-wrap">{msg.content}</div>
             </div>
           </div>
         ))}
 
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-white dark:bg-[#121826] border border-slate-200 dark:border-white/[0.06] p-4 rounded-card-lg rounded-tl-none text-slate-400 text-xs flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-indigo-600 animate-ping" />
-              <span>Analyzing market data &amp; generating deterministic signal response...</span>
+            <div className="bg-[#EAF2EC] border border-[#D8E5DE] p-3 rounded-[10px] text-xs text-[#087F73] flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#087F73] animate-ping" />
+              <span>Analyzing market data &amp; formulating evidence...</span>
             </div>
           </div>
         )}
         <div ref={endRef} />
       </div>
 
-      {/* Suggested Prompts */}
-      <div className="flex items-center space-x-2 py-3 overflow-x-auto scrollbar-none shrink-0">
+      {/* ── Suggested Prompts ──────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 py-2 overflow-x-auto scrollbar-none shrink-0">
         {suggestions.map((s) => (
           <button
             key={s}
             onClick={() => send(s)}
-            className="px-3 py-1.5 rounded-btn bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-white/[0.06] text-xs font-medium text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-white/20 transition-all shrink-0"
+            className="px-3 py-1.5 rounded-[6px] bg-white border border-[#E1E7E8] text-xs text-[#687A81] hover:text-[#142B32] hover:border-[#CCD7D9] transition-all shrink-0 whitespace-nowrap"
           >
             {s}
           </button>
         ))}
       </div>
 
-      {/* Input Form */}
-      <div className="pt-3 border-t border-slate-200 dark:border-white/[0.06] shrink-0">
-        <div className="relative flex items-center">
+      {/* ── Input Box ──────────────────────────────────────────────────── */}
+      <div className="pt-3 border-t border-[#E1E7E8] shrink-0">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(input);
+          }}
+          className="relative flex items-center"
+        >
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') send(input);
-            }}
-            placeholder="Ask AI Copilot about any NIFTY 50 stock..."
-            className="w-full bg-white dark:bg-[#121826] border border-slate-200 dark:border-white/[0.08] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 rounded-input py-3 pl-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+            placeholder="Ask about companies, sector moves, or technical observations..."
+            className="w-full bg-white border border-[#E1E7E8] text-[#142B32] placeholder:text-[#687A81] rounded-[8px] py-2.5 pl-3.5 pr-12 text-xs md:text-sm focus:outline-none focus:ring-2 focus:ring-[#087F73]/30"
           />
           <button
-            onClick={() => send(input)}
+            type="submit"
             disabled={!input.trim() || loading}
-            className="absolute right-2 p-2 rounded-btn bg-indigo-600 text-white disabled:opacity-40 transition-opacity"
+            className="absolute right-2 px-3 py-1.5 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[6px] text-xs font-semibold disabled:opacity-40 flex items-center gap-1"
           >
-            <Send className="w-4 h-4" />
+            <span>Ask</span>
+            <Send className="w-3.5 h-3.5" />
           </button>
-        </div>
-        <p className="mt-1.5 text-[11px] text-slate-400 text-center">
-          Not investment advice • Indian equities (NSE) • Deterministic quant engine
+        </form>
+        <p className="mt-2 text-[11px] text-[#687A81] text-center">
+          Deterministic quantitative engine · Not investment advice · NSE Equities
         </p>
       </div>
     </div>
