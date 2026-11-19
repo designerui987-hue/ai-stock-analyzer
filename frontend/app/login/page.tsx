@@ -274,15 +274,15 @@ export default function LoginPage() {
                   onClick={() => setRememberMe(!rememberMe)}
                   className={`w-4 h-4 rounded border flex items-center justify-center transition-colors focus:outline-none ${
                     rememberMe
-                      ? 'bg-indigo-600 border-indigo-600 text-white'
-                      : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900'
+                      ? 'bg-[#087F73] border-[#087F73] text-white'
+                      : 'border-[#E1E7E8] bg-white'
                   }`}
                 >
                   {rememberMe && <Check className="w-3 h-3 stroke-[3]" />}
                 </button>
                 <span
                   onClick={() => setRememberMe(!rememberMe)}
-                  className="text-body text-[#475569] dark:text-[#CBD5E1] cursor-pointer select-none"
+                  className="text-xs text-[#687A81] cursor-pointer select-none"
                 >
                   Remember me for 30 days
                 </span>
@@ -292,7 +292,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full h-[48px] rounded-btn bg-[#4F46E5] dark:bg-[#6366F1] hover:bg-[#4338CA] dark:hover:bg-[#4F46E5] text-white font-medium text-body transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/40 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 shadow-subtle"
+                className="w-full h-[46px] rounded-[10px] bg-[#087F73] hover:bg-[#06685e] text-white font-medium text-sm transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[#087F73]/40 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 shadow-sm"
               >
                 {isLoading ? (
                   <>
@@ -306,26 +306,26 @@ export default function LoginPage() {
             </form>
 
             {/* Footer Sign Up Prompt & Legal */}
-            <div className="mt-8 pt-6 border-t border-[#E5E7EB] dark:border-white/[0.06] text-center space-y-3">
-              <p className="text-body text-[#475569] dark:text-[#CBD5E1]">
+            <div className="mt-8 pt-6 border-t border-[#E1E7E8] text-center space-y-3">
+              <p className="text-sm text-[#687A81]">
                 Don't have an account?{' '}
                 <Link
                   href="/register"
-                  className="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center space-x-1"
+                  className="font-semibold text-[#087F73] hover:underline inline-flex items-center space-x-1"
                 >
                   <span>Create Account</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </Link>
               </p>
 
-              <div className="flex items-center justify-center space-x-4 text-caption text-[#94A3B8] dark:text-[#64748B]">
-                <a href="#" className="hover:underline">
+              <div className="flex items-center justify-center space-x-4 text-xs text-[#899DA3]">
+                <Link href="/terms" className="hover:underline">
                   Terms of Service
-                </a>
+                </Link>
                 <span>•</span>
-                <a href="#" className="hover:underline">
+                <Link href="/privacy" className="hover:underline">
                   Privacy Policy
-                </a>
+                </Link>
               </div>
             </div>
           </div>

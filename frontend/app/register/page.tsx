@@ -56,8 +56,8 @@ export default function RegisterPage() {
     if (!password) {
       setPasswordError('Password is required.');
       valid = false;
-    } else if (password.length < 6) {
-      setPasswordError('Password must be at least 6 characters.');
+    } else if (password.length < 8) {
+      setPasswordError('Password must be at least 8 characters long.');
       valid = false;
     }
 
@@ -160,88 +160,94 @@ export default function RegisterPage() {
         </div>
 
         <div className="w-full flex-1 flex items-center justify-center">
-          <div className="w-full max-w-[460px] bg-white dark:bg-[#121826] border border-[#E5E7EB] dark:border-white/[0.08] rounded-[20px] p-8 sm:p-10 shadow-subtle dark:shadow-dark-subtle transition-all duration-200 ease-out">
-            <div className="space-y-1.5 text-left mb-8">
-              <h2 className="text-[28px] font-semibold tracking-tight text-[#111827] dark:text-[#F8FAFC] leading-tight">
+          <div className="w-full max-w-[460px] bg-white border border-[#E1E7E8] rounded-[20px] p-8 sm:p-10 shadow-sm transition-all duration-200 ease-out">
+            <div className="space-y-1.5 text-left mb-6">
+              <h2 className="text-[28px] font-semibold tracking-tight text-[#142B32] leading-tight">
                 Create Account
               </h2>
-              <p className="text-body text-[#475569] dark:text-[#CBD5E1]">
-                Start your journey with StockAI today.
+              <p className="text-sm text-[#687A81]">
+                Start your research workspace with StockAI today.
               </p>
             </div>
 
+            {error && (
+              <div className="mb-6 p-3.5 rounded-[10px] bg-[#BB4B48]/10 border border-[#BB4B48]/20 text-[#BB4B48] text-xs font-medium">
+                {error}
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <label className="block text-caption font-medium text-[#111827] dark:text-[#F8FAFC]">
+                <label className="block text-xs font-semibold text-[#142B32] uppercase tracking-wider">
                   Full Name
                 </label>
                 <div className="relative flex items-center">
-                  <User className="absolute left-3.5 w-4 h-4 text-[#94A3B8] dark:text-[#64748B] pointer-events-none" />
+                  <User className="absolute left-3.5 w-4 h-4 text-[#899DA3] pointer-events-none" />
                   <input
                     type="text"
                     disabled={isLoading}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="Alex Morgan"
-                    className={`w-full h-[44px] pl-10 pr-3.5 bg-slate-50 dark:bg-slate-900/60 border text-[#111827] dark:text-[#F8FAFC] placeholder-[#94A3B8] rounded-input text-body transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 ${
-                      usernameError ? 'border-[#EF4444]' : 'border-[#E5E7EB] dark:border-white/[0.08]'
+                    className={`w-full h-[44px] pl-10 pr-3.5 bg-[#F5F7F7] border text-[#142B32] placeholder-[#899DA3] rounded-[10px] text-sm transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[#087F73]/20 focus:border-[#087F73] ${
+                      usernameError ? 'border-[#BB4B48]' : 'border-[#E1E7E8]'
                     }`}
                   />
                 </div>
-                {usernameError && <p className="text-caption text-[#EF4444] mt-1">{usernameError}</p>}
+                {usernameError && <p className="text-xs text-[#BB4B48] mt-1">{usernameError}</p>}
               </div>
 
               <div className="space-y-1.5">
-                <label className="block text-caption font-medium text-[#111827] dark:text-[#F8FAFC]">
+                <label className="block text-xs font-semibold text-[#142B32] uppercase tracking-wider">
                   Email Address
                 </label>
                 <div className="relative flex items-center">
-                  <Mail className="absolute left-3.5 w-4 h-4 text-[#94A3B8] dark:text-[#64748B] pointer-events-none" />
+                  <Mail className="absolute left-3.5 w-4 h-4 text-[#899DA3] pointer-events-none" />
                   <input
                     type="email"
                     disabled={isLoading}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="name@example.com"
-                    className={`w-full h-[44px] pl-10 pr-3.5 bg-slate-50 dark:bg-slate-900/60 border text-[#111827] dark:text-[#F8FAFC] placeholder-[#94A3B8] rounded-input text-body transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 ${
-                      emailError ? 'border-[#EF4444]' : 'border-[#E5E7EB] dark:border-white/[0.08]'
+                    className={`w-full h-[44px] pl-10 pr-3.5 bg-[#F5F7F7] border text-[#142B32] placeholder-[#899DA3] rounded-[10px] text-sm transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[#087F73]/20 focus:border-[#087F73] ${
+                      emailError ? 'border-[#BB4B48]' : 'border-[#E1E7E8]'
                     }`}
                   />
                 </div>
-                {emailError && <p className="text-caption text-[#EF4444] mt-1">{emailError}</p>}
+                {emailError && <p className="text-xs text-[#BB4B48] mt-1">{emailError}</p>}
               </div>
 
               <div className="space-y-1.5">
-                <label className="block text-caption font-medium text-[#111827] dark:text-[#F8FAFC]">
+                <label className="block text-xs font-semibold text-[#142B32] uppercase tracking-wider">
                   Password
                 </label>
                 <div className="relative flex items-center">
-                  <Lock className="absolute left-3.5 w-4 h-4 text-[#94A3B8] dark:text-[#64748B] pointer-events-none" />
+                  <Lock className="absolute left-3.5 w-4 h-4 text-[#899DA3] pointer-events-none" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     disabled={isLoading}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="At least 6 characters"
-                    className={`w-full h-[44px] pl-10 pr-10 bg-slate-50 dark:bg-slate-900/60 border text-[#111827] dark:text-[#F8FAFC] placeholder-[#94A3B8] rounded-input text-body transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 ${
-                      passwordError ? 'border-[#EF4444]' : 'border-[#E5E7EB] dark:border-white/[0.08]'
+                    placeholder="At least 8 characters"
+                    className={`w-full h-[44px] pl-10 pr-10 bg-[#F5F7F7] border text-[#142B32] placeholder-[#899DA3] rounded-[10px] text-sm transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[#087F73]/20 focus:border-[#087F73] ${
+                      passwordError ? 'border-[#BB4B48]' : 'border-[#E1E7E8]'
                     }`}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3.5 text-[#94A3B8] hover:text-[#111827] dark:hover:text-[#F8FAFC]"
+                    className="absolute right-3.5 text-[#899DA3] hover:text-[#142B32]"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-                {passwordError && <p className="text-caption text-[#EF4444] mt-1">{passwordError}</p>}
+                {passwordError && <p className="text-xs text-[#BB4B48] mt-1">{passwordError}</p>}
               </div>
 
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full h-[48px] rounded-btn bg-[#4F46E5] dark:bg-[#6366F1] hover:bg-[#4338CA] text-white font-medium text-body transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/40 active:scale-[0.99] disabled:opacity-50 flex items-center justify-center space-x-2 mt-2 shadow-subtle"
+                className="w-full h-[46px] rounded-[10px] bg-[#087F73] hover:bg-[#06685e] text-white font-medium text-sm transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[#087F73]/40 active:scale-[0.99] disabled:opacity-50 flex items-center justify-center space-x-2 mt-2 shadow-sm"
               >
                 {isLoading ? (
                   <>
@@ -254,12 +260,12 @@ export default function RegisterPage() {
               </button>
             </form>
 
-            <div className="mt-8 pt-6 border-t border-[#E5E7EB] dark:border-white/[0.06] text-center">
-              <p className="text-body text-[#475569] dark:text-[#CBD5E1]">
+            <div className="mt-8 pt-6 border-t border-[#E1E7E8] text-center">
+              <p className="text-sm text-[#687A81]">
                 Already have an account?{' '}
                 <Link
                   href="/login"
-                  className="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                  className="font-semibold text-[#087F73] hover:underline"
                 >
                   Sign In →
                 </Link>
