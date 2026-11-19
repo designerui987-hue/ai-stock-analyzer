@@ -36,25 +36,37 @@ class ResearchSnapshotService:
     """Service for research snapshots, 'What Changed' comparison, and personalized radar."""
 
     @staticmethod
-    def _parse_datetime(val: Any) -> Optional[datetime]:
+    def _parse_datetime(val: Any, max_future_skew_seconds: int = 300) -> Optional[datetime]:
         """
         Parse datetime object or ISO string to timezone-aware UTC datetime.
-        Returns None if missing or malformed; NEVER silently falls back to current time.
+        Returns None if missing, malformed, or exceeds acceptable future clock-skew (default 300s).
+        NEVER silently falls back to current time.
         """
         if val is None:
             return None
+        dt: Optional[datetime] = None
         if isinstance(val, datetime):
             if val.tzinfo is None:
-                return val.replace(tzinfo=timezone.utc)
-            return val.astimezone(timezone.utc)
-        if isinstance(val, str) and val.strip():
+                dt = val.replace(tzinfo=timezone.utc)
+            else:
+                dt = val.astimezone(timezone.utc)
+        elif isinstance(val, str) and val.strip():
             try:
-                dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    return dt.replace(tzinfo=timezone.utc)
-                return dt.astimezone(timezone.utc)
+                parsed = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    dt = parsed.replace(tzinfo=timezone.utc)
+                else:
+                    dt = parsed.astimezone(timezone.utc)
             except Exception:
                 return None
+        
+        if dt is not None:
+            now_utc = datetime.now(timezone.utc)
+            # Reject future timestamps outside clock-skew tolerance
+            if dt > now_utc + timedelta(seconds=max_future_skew_seconds):
+                logger.warning("[ResearchSnapshotService] Rejecting future timestamp %s (> %ss ahead)", dt, max_future_skew_seconds)
+                return None
+            return dt
         return None
 
     @staticmethod
@@ -165,8 +177,10 @@ class ResearchSnapshotService:
                     if time_diff < MIN_SNAPSHOT_INTERVAL_SECONDS:
                         price_diff_pct = abs(float(price) - latest.price) / latest.price * 100.0
                         
-                        # Material change checks
+                        # 1. Price movement
                         price_material = price_diff_pct >= 0.5
+                        
+                        # 2. RSI momentum shift (5+ points or zone transition across 30 or 70)
                         rsi_material = False
                         if rsi is not None and latest.rsi_14 is not None:
                             rsi_material = (
@@ -177,13 +191,67 @@ class ResearchSnapshotService:
                         elif (rsi is None) != (latest.rsi_14 is None):
                             rsi_material = True
 
-                        ma_crossed = False
-                        if sma20 is not None and latest.sma_20 is not None:
-                            ma_crossed = (float(price) > sma20) != (latest.price > latest.sma_20)
+                        # 3. Volume surge shift (crossing 1.5x threshold or ratio shift >= 0.3)
+                        vol_material = False
+                        latest_vol_surge = latest.vol_surge
+                        if vol_surge is not None and latest_vol_surge is not None:
+                            crossed_surge = (vol_surge >= 1.5) != (latest_vol_surge >= 1.5)
+                            ratio_shifted = abs(vol_surge - latest_vol_surge) >= 0.3
+                            vol_material = crossed_surge or ratio_shifted
+                        elif (vol_surge is None) != (latest_vol_surge is None):
+                            vol_material = True
 
+                        # 4. MACD shift (sign change / zero-line cross, signal cross, or shift >= 0.5)
+                        macd_material = False
+                        if macd is not None and latest.macd is not None:
+                            sign_cross = (macd >= 0) != (latest.macd >= 0)
+                            mag_shift = abs(macd - latest.macd) >= 0.5
+                            signal_cross = False
+                            if macd_signal is not None and latest.macd_signal is not None:
+                                signal_cross = (macd > macd_signal) != (latest.macd > latest.macd_signal)
+                            macd_material = sign_cross or mag_shift or signal_cross
+                        elif (macd is None) != (latest.macd is None):
+                            macd_material = True
+
+                        # 5. Moving average crossings (SMA 20, SMA 50, SMA 200, Golden/Death cross)
+                        ma_crossed = False
+                        curr_p = float(price)
+                        prev_p = latest.price
+                        if sma20 is not None and latest.sma_20 is not None:
+                            if (curr_p > sma20) != (prev_p > latest.sma_20):
+                                ma_crossed = True
+                        if sma50 is not None and latest.sma_50 is not None:
+                            if (curr_p > sma50) != (prev_p > latest.sma_50):
+                                ma_crossed = True
+                        if sma200 is not None and latest.sma_200 is not None:
+                            if (curr_p > sma200) != (prev_p > latest.sma_200):
+                                ma_crossed = True
+                        if sma20 is not None and sma50 is not None and latest.sma_20 is not None and latest.sma_50 is not None:
+                            if (sma20 > sma50) != (latest.sma_20 > latest.sma_50):
+                                ma_crossed = True
+
+                        # 6. Signal change
                         signal_changed = signal != latest.signal
 
-                        if not (price_material or rsi_material or ma_crossed or signal_changed):
+                        # 7. Methodology or configuration change
+                        methodology_changed = (
+                            rule_version != latest.rule_version
+                            or tf != latest.timeframe
+                            or lb != latest.lookback_bars
+                            or adj != latest.adjustment_basis
+                        )
+
+                        is_material = (
+                            price_material
+                            or rsi_material
+                            or vol_material
+                            or macd_material
+                            or ma_crossed
+                            or signal_changed
+                            or methodology_changed
+                        )
+
+                        if not is_material:
                             # Invariant: No material change within deduplication window
                             return latest
 
@@ -216,23 +284,49 @@ class ResearchSnapshotService:
             db.commit()
             db.refresh(snapshot)
 
-            # 3. Retention Scoped Pruning:
+            # 3. Retention Scoped Pruning with Baseline Preservation:
             # Keeps strictly up to MAX_SNAPSHOT_RETENTION_PER_SYMBOL (30) snapshots per user/symbol.
-            all_snapshots = (
-                db.query(ResearchSnapshot.id)
+            # Intelligently protects calendar-day / session baselines (e.g. daily session open)
+            # so high-frequency intraday price events do not erase meaningful comparison history.
+            snaps = (
+                db.query(ResearchSnapshot.id, ResearchSnapshot.as_of)
                 .filter(
                     ResearchSnapshot.user_id == user_id,
                     ResearchSnapshot.symbol == clean_sym,
                     ResearchSnapshot.exchange == clean_ex,
                 )
-                .order_by(desc(ResearchSnapshot.as_of))
+                .order_by(ResearchSnapshot.as_of.asc())
                 .all()
             )
 
-            if len(all_snapshots) > MAX_SNAPSHOT_RETENTION_PER_SYMBOL:
-                surplus_ids = [s[0] for s in all_snapshots[MAX_SNAPSHOT_RETENTION_PER_SYMBOL:]]
-                db.query(ResearchSnapshot).filter(ResearchSnapshot.id.in_(surplus_ids)).delete(synchronize_session=False)
-                db.commit()
+            if len(snaps) > MAX_SNAPSHOT_RETENTION_PER_SYMBOL:
+                # Group snapshots by calendar day to identify session open baselines
+                day_map: Dict[str, list] = {}
+                for sid, dt in snaps:
+                    d_key = dt.strftime("%Y-%m-%d") if isinstance(dt, datetime) else str(dt)[:10]
+                    if d_key not in day_map:
+                        day_map[d_key] = []
+                    day_map[d_key].append(sid)
+
+                # Protect session baselines (earliest snapshot of each calendar day)
+                baseline_ids = set()
+                for d_key, ids in day_map.items():
+                    baseline_ids.add(ids[0])
+
+                # Protect newest intraday snapshots
+                all_ids_newest_first = [s[0] for s in reversed(snaps)]
+                keep_ids = set(baseline_ids)
+
+                for sid in all_ids_newest_first:
+                    if len(keep_ids) >= MAX_SNAPSHOT_RETENTION_PER_SYMBOL:
+                        break
+                    keep_ids.add(sid)
+
+                # Prune redundant intermediate points not in keep_ids
+                surplus_ids = [s[0] for s in snaps if s[0] not in keep_ids]
+                if surplus_ids:
+                    db.query(ResearchSnapshot).filter(ResearchSnapshot.id.in_(surplus_ids)).delete(synchronize_session=False)
+                    db.commit()
 
             return snapshot
         except Exception as exc:
@@ -614,8 +708,24 @@ class ResearchSnapshotService:
             tech = technicals_map.get(clean) or {}
 
             price = quote.get("price")
-            if not isinstance(price, (int, float)) or price <= 0:
+            if not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
                 continue
+
+            # Reject stale or explicitly unavailable quotes from entering radar
+            freshness = str(quote.get("freshness") or "").upper()
+            if freshness in ("STALE", "UNAVAILABLE") or quote.get("status") == "unavailable":
+                continue
+
+            # Validate observation timestamp: if provided, reject invalid or future dates
+            raw_as_of = quote.get("as_of") or quote.get("exchange_timestamp")
+            as_of_dt: Optional[datetime] = None
+            if raw_as_of is not None:
+                as_of_dt = ResearchSnapshotService._parse_datetime(raw_as_of)
+                if as_of_dt is None:
+                    # Invalid or future timestamp provided -> reject
+                    continue
+            else:
+                as_of_dt = datetime.now(timezone.utc)
 
             change_pct = quote.get("change_percent") or quote.get("change_pct") or 0.0
             volume_ratio = tech.get("vol_surge") or tech.get("volume_ratio")
@@ -623,8 +733,8 @@ class ResearchSnapshotService:
             sma20 = tech.get("sma_20")
             sma50 = tech.get("sma_50")
             sector = quote.get("sector") or NIFTY50_STOCKS.get(clean, {}).get("sector", "Equity")
-            as_of = quote.get("as_of") or quote.get("exchange_timestamp")
             source = quote.get("source") or "yfinance/NSE"
+            as_of = as_of_dt.isoformat()
 
             item_triggers = []
 
@@ -749,19 +859,6 @@ class ResearchSnapshotService:
             )
             watchlist_symbols = [i[0].upper() for i in items]
 
-            # If empty, also check legacy table "WatchlistItem" in case table is pending migration
-            if not watchlist_symbols:
-                try:
-                    from sqlalchemy import text
-                    legacy_rows = db.execute(
-                        text('SELECT symbol FROM "WatchlistItem" WHERE user_id = :uid ORDER BY added_at DESC'),
-                        {"uid": uid_str}
-                    ).fetchall()
-                    if legacy_rows:
-                        watchlist_symbols = [r[0].upper() for r in legacy_rows]
-                except Exception:
-                    pass
-
         # Fetch portfolio summary
         portfolio_summary: Optional[dict] = None
         if user_id is not None:
@@ -778,12 +875,19 @@ class ResearchSnapshotService:
 
         has_watchlist = len(watchlist_symbols) > 0
 
-        # Symbols to evaluate for radar: user's watchlist + any portfolio holdings
-        eval_symbols = list(set(watchlist_symbols))
+        # Symbols to evaluate for radar: user's watchlist + any portfolio holdings (deterministic ordering)
+        seen_eval = set()
+        eval_symbols: List[str] = []
+        for sym in watchlist_symbols:
+            if sym not in seen_eval:
+                seen_eval.add(sym)
+                eval_symbols.append(sym)
+
         if has_portfolio:
             for h in portfolio_summary.get("holdings", []):
-                sym = h.get("symbol")
-                if sym and sym not in eval_symbols:
+                sym = (h.get("symbol") or "").strip().upper()
+                if sym and sym not in seen_eval:
+                    seen_eval.add(sym)
                     eval_symbols.append(sym)
 
         # Default fallback symbols if user has none
@@ -817,11 +921,13 @@ class ResearchSnapshotService:
 
                     # Record / refresh snapshot for followed companies so comparisons remain fresh
                     if sym in watchlist_symbols:
+                        ai_pred = pred_engine.predict_signal(sym, q["price"], tech) if candles else None
                         ResearchSnapshotService.record_snapshot(
                             db=db,
                             symbol=sym,
                             quote_data=q,
                             technicals=tech,
+                            ai_prediction=ai_pred,
                             exchange="NSE",
                             user_id=user_id,
                         )

@@ -188,8 +188,8 @@ def test_user_tenant_isolation_in_snapshots():
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    user_a_time = datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc)
-    user_b_time = datetime(2026, 11, 19, 11, 0, tzinfo=timezone.utc)
+    user_a_time = datetime.now(timezone.utc) - timedelta(hours=50)
+    user_b_time = user_a_time + timedelta(hours=1)
 
     # User A records snapshot
     quote_a = {"price": 1000.0, "as_of": user_a_time.isoformat()}
@@ -213,7 +213,7 @@ def test_user_tenant_isolation_in_snapshots():
 
     # Pruning User A's history must not touch User B's history
     for i in range(35):
-        t = user_a_time + timedelta(hours=i + 1)
+        t = user_a_time + timedelta(hours=i + 2)
         q = {"price": 1000.0 + i, "as_of": t.isoformat()}
         ResearchSnapshotService.record_snapshot(session, "INFY", q, user_id=101)
 
@@ -405,3 +405,172 @@ def test_review_findings_hardening():
     assert brief["watchlist_count"] >= 1
     assert "BHARTIARTL" in [w["symbol"] for w in brief.get("watchlist_changes", [])] or brief["has_watchlist"] is True
     assert brief["is_onboarding"] is False
+
+
+def test_recheck_findings_probe_verifications():
+    """
+    Dedicated test suite verifying fixes for all independent review findings (ba7f3f9 recheck):
+    Finding 1: Legacy integer watchlist_items table correctly migrated to string identifiers.
+    Finding 2: Deleted follows stay deleted; never reappear from legacy tables on server restart.
+    Finding 5: Material snapshot deduplication captures volume ratio and MACD shifts.
+    Finding 6: Future dates rejected (> 300s clock skew) and stale quotes rejected from radar.
+    Finding 7: 30-snapshot retention preserves daily session open baselines under rapid intraday events.
+    """
+    # ── Finding 1: Old-schema integer watchlist migration ─────────────────────
+    legacy_engine = create_engine("sqlite:///:memory:", poolclass=StaticPool)
+    with legacy_engine.connect() as conn:
+        trans = conn.begin()
+        # Simulate pre-commit backend table with INTEGER primary and foreign keys, NO exchange
+        conn.execute(text("""
+            CREATE TABLE watchlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                symbol VARCHAR NOT NULL,
+                notes TEXT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
+        conn.execute(text("""
+            INSERT INTO watchlist_items (id, user_id, symbol, notes)
+            VALUES (1, 101, 'RELIANCE', 'Legacy int row');
+        """))
+
+        # Simulate legacy frontend table with string UUID
+        conn.execute(text("""
+            CREATE TABLE WatchlistItem (
+                id VARCHAR PRIMARY KEY,
+                user_id VARCHAR NOT NULL,
+                symbol VARCHAR NOT NULL,
+                exchange VARCHAR DEFAULT 'NSE',
+                notes TEXT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
+        conn.execute(text("""
+            INSERT INTO WatchlistItem (id, user_id, symbol, exchange, notes)
+            VALUES ('uuid-tcs-001', '101', 'TCS', 'NSE', 'Legacy frontend row');
+        """))
+        trans.commit()
+
+    # Run modern migration
+    Base.metadata.create_all(bind=legacy_engine)
+    apply_migrations(legacy_engine)
+
+    # Inspect migrated table
+    inspector = inspect(legacy_engine)
+    col_info = {col["name"]: str(col["type"]).upper() for col in inspector.get_columns("watchlist_items")}
+    assert "VARCHAR" in col_info["id"] or "TEXT" in col_info["id"], f"id should be VARCHAR/TEXT, got {col_info['id']}"
+    assert "VARCHAR" in col_info["user_id"] or "TEXT" in col_info["user_id"], f"user_id should be VARCHAR/TEXT, got {col_info['user_id']}"
+    assert "exchange" in col_info
+
+    LegacySession = sessionmaker(bind=legacy_engine)
+    leg_session = LegacySession()
+
+    # Both old rows must be preserved in canonical watchlist_items
+    canonical_items = leg_session.query(WatchlistItem).filter(WatchlistItem.user_id == "101").all()
+    symbols = {i.symbol for i in canonical_items}
+    assert "RELIANCE" in symbols
+    assert "TCS" in symbols
+
+    # Adding a new string-UUID item through SQLAlchemy ORM must succeed cleanly
+    new_item = WatchlistItem(id="uuid-infy-002", user_id="101", symbol="INFY", exchange="NSE")
+    leg_session.add(new_item)
+    leg_session.commit()
+    assert leg_session.query(WatchlistItem).filter(WatchlistItem.symbol == "INFY").first() is not None
+
+    # Legacy WatchlistItem table must be dropped
+    table_names = inspector.get_table_names()
+    assert "WatchlistItem" not in table_names
+
+    # ── Finding 2: Deleted follows stay deleted across restarts ───────────────
+    # Delete TCS from watchlist
+    leg_session.query(WatchlistItem).filter(WatchlistItem.symbol == "TCS", WatchlistItem.user_id == "101").delete()
+    leg_session.commit()
+
+    # Re-run migrations (simulating server restart)
+    apply_migrations(legacy_engine)
+
+    # Verify deleted TCS does NOT reappear
+    recheck_items = leg_session.query(WatchlistItem).filter(WatchlistItem.symbol == "TCS", WatchlistItem.user_id == "101").all()
+    assert len(recheck_items) == 0, "Deleted follow must NEVER reappear from legacy tables on restart"
+
+    # Brief must report accurate count without legacy fallbacks
+    brief = ResearchSnapshotService.get_personalized_brief(leg_session, user_id="101")
+    assert "TCS" not in [w["symbol"] for w in brief.get("watchlist_changes", [])]
+
+    # ── Finding 5: Material snapshot deduplication captures volume & MACD ──────
+    t_now = datetime.now(timezone.utc) - timedelta(minutes=10)
+    t_next = t_now + timedelta(seconds=60)  # within 300s deduplication window
+
+    snap_base = ResearchSnapshotService.record_snapshot(
+        leg_session, "SBIN",
+        quote_data={"price": 800.0, "as_of": t_now.isoformat()},
+        technicals={"rsi": 50.0, "volume_ratio": 1.0, "macd": -1.0, "macd_signal": -0.5, "sma_20": 790.0},
+        ai_prediction={"signal": "HOLD"},
+    )
+    assert snap_base is not None
+
+    # Change volume ratio 1.0 -> 2.0 (surging >= 1.5x) and MACD -1.0 -> +1.0 (zero-line cross)
+    snap_material = ResearchSnapshotService.record_snapshot(
+        leg_session, "SBIN",
+        quote_data={"price": 800.0, "as_of": t_next.isoformat()},  # Same price!
+        technicals={"rsi": 50.0, "volume_ratio": 2.0, "macd": 1.0, "macd_signal": 0.5, "sma_20": 790.0},
+        ai_prediction={"signal": "HOLD"},
+    )
+    assert snap_material is not None
+    assert snap_material.id != snap_base.id, "Volume surge and MACD zero-crossing must be retained as new snapshot"
+    assert snap_material.vol_surge == 2.0
+    assert snap_material.macd == 1.0
+
+    # ── Finding 6: Future timestamps & stale radar quotes rejected ────────────
+    # Future timestamp > 300s ahead rejected
+    future_time = datetime.now(timezone.utc) + timedelta(days=7)
+    future_snap = ResearchSnapshotService.record_snapshot(
+        leg_session, "INFY",
+        quote_data={"price": 1800.0, "as_of": future_time.isoformat(), "freshness": "LIVE"}
+    )
+    assert future_snap is None, "Future timestamp (> 300s) must be rejected"
+
+    # Stale quote rejected from radar
+    stale_quotes = {
+        "INFY": {
+            "price": 1800.0,
+            "freshness": "STALE",
+            "as_of": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            "change_pct": 3.0,
+        }
+    }
+    stale_tech = {"INFY": {"rsi": 75.0, "sma_20": 1780.0}}
+    radar = ResearchSnapshotService.get_radar_items(["INFY"], stale_quotes, stale_tech)
+    assert len(radar) == 0, "STALE quote must not produce a radar item"
+
+    # ── Finding 7: Retention preserves daily session open baseline ────────────
+    # Simulate 40 rapid intraday price events at 5-second intervals today
+    t_start = datetime.now(timezone.utc) - timedelta(minutes=5)
+    first_snap_id = None
+    for i in range(40):
+        t_event = t_start + timedelta(seconds=i * 5)
+        # alternate price by 1% each step to trigger material recording
+        p = 1000.0 + (i % 2) * 15.0 + i * 0.5
+        s = ResearchSnapshotService.record_snapshot(
+            leg_session, "TATAMOTORS",
+            quote_data={"price": p, "as_of": t_event.isoformat()},
+            user_id="user_retention_test",
+        )
+        if i == 0:
+            first_snap_id = s.id
+
+    # Total snapshots must be capped at 30
+    total_snaps = leg_session.query(ResearchSnapshot).filter(
+        ResearchSnapshot.symbol == "TATAMOTORS",
+        ResearchSnapshot.user_id == "user_retention_test"
+    ).count()
+    assert total_snaps == 30, f"Expected 30 snapshots, found {total_snaps}"
+
+    # The opening session baseline (t_start, first_snap_id) must be PRESERVED
+    baseline_check = leg_session.query(ResearchSnapshot).filter(
+        ResearchSnapshot.id == first_snap_id
+    ).first()
+    assert baseline_check is not None, "Daily session baseline must be preserved; not purged by rapid intraday events"
+
+    leg_session.close()

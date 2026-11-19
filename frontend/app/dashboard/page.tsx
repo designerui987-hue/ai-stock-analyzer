@@ -62,7 +62,10 @@ export default function TodayPage() {
   const [indices, setIndices] = useState<IndexQuote[]>([]);
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[] | null>(null);
   const [watchlistQuotes, setWatchlistQuotes] = useState<Record<string, any>>({});
-  const [focusChart, setFocusChart] = useState<Array<{ time: string; value: number }>>([]);
+  const [focusChart, setFocusChart] = useState<{ symbol: string; data: Array<{ time: string; value: number }> }>({
+    symbol: '',
+    data: [],
+  });
   const [loading, setLoading] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
@@ -112,11 +115,31 @@ export default function TodayPage() {
       setLoading(true);
       setOverviewError(null);
 
-      const [overviewRes, userWatchlistRes, briefRes] = await Promise.all([
-        api.getMarketOverview().catch(() => null),
-        auth.isAuthenticated() ? api.getWatchlist().catch(() => null) : null,
-        auth.isAuthenticated() ? api.getPersonalizedBrief().catch(() => null) : null,
-      ]);
+      let overviewRes: any = null;
+      let userWatchlistRes: any = null;
+      let watchlistFetchError: string | null = null;
+      let briefRes: any = null;
+
+      try {
+        overviewRes = await api.getMarketOverview();
+      } catch {
+        overviewRes = null;
+      }
+
+      if (auth.isAuthenticated()) {
+        try {
+          userWatchlistRes = await api.getWatchlist();
+        } catch (err: any) {
+          watchlistFetchError = err?.message || 'Watchlist service is temporarily unavailable.';
+          userWatchlistRes = null;
+        }
+
+        try {
+          briefRes = await api.getPersonalizedBrief();
+        } catch {
+          briefRes = null;
+        }
+      }
 
       if (briefRes) {
         setPersonalizedBrief(briefRes);
@@ -134,8 +157,9 @@ export default function TodayPage() {
       }
 
       let syms: string[] = [];
-      if (userWatchlistRes?.unavailable || userWatchlistRes?.error) {
-        setWatchlistError(userWatchlistRes.error || 'Watchlist service is temporarily unavailable.');
+      if (watchlistFetchError || userWatchlistRes?.unavailable || userWatchlistRes?.error) {
+        // Finding 4: Preserve rejected requests as an explicit failure state; never convert 503 to empty
+        setWatchlistError(watchlistFetchError || userWatchlistRes?.error || 'Watchlist service is temporarily unavailable.');
       } else if (userWatchlistRes?.success && Array.isArray(userWatchlistRes.items)) {
         setWatchlistError(null);
         syms = userWatchlistRes.items.map((i: any) => i.symbol.toUpperCase());
@@ -144,14 +168,23 @@ export default function TodayPage() {
         setWatchlistError(null);
         syms = userWatchlistRes.map((i: any) => (typeof i === 'string' ? i : i.symbol).toUpperCase());
         setWatchlistSymbols(syms);
-      } else {
+      } else if (!auth.isAuthenticated()) {
         setWatchlistError(null);
         setWatchlistSymbols([]);
       }
 
-      // Fetch quotes for followed stocks
+      // Finding 3: Authoritatively select the focus instrument FIRST
+      // Prioritize the top-ranked radar item from the verified brief, then followed stocks, then fallback.
+      const topRadarSym = briefRes?.radar_items?.[0]?.symbol;
+      const targetFocusSym = topRadarSym || (syms.length > 0 ? syms[0] : 'RELIANCE');
+
+      // Fetch quotes: Ensure targetFocusSym is ALWAYS included alongside followed symbols
       const quoteMap: Record<string, any> = {};
-      const symbolsToFetch = syms.length > 0 ? syms.slice(0, 10) : ['RELIANCE', 'HDFCBANK', 'TCS'];
+      const symbolsToFetch = Array.from(new Set([
+        targetFocusSym,
+        ...(syms.length > 0 ? syms.slice(0, 10) : ['RELIANCE', 'HDFCBANK', 'TCS'])
+      ]));
+
       await Promise.all(
         symbolsToFetch.map(async (sym) => {
           try {
@@ -167,20 +200,22 @@ export default function TodayPage() {
 
       setWatchlistQuotes(quoteMap);
 
-      // Fetch 1M trajectory for focus stock
-      const focusSym = syms.length > 0 ? syms[0] : 'RELIANCE';
+      // Fetch 1M trajectory for the EXACT SAME targetFocusSym
       try {
-        const chartRes = await api.getChartData(focusSym, '1M').catch(() => null);
+        const chartRes = await api.getChartData(targetFocusSym, '1M').catch(() => null);
         if (Array.isArray(chartRes) && chartRes.length > 0) {
-          setFocusChart(
-            chartRes.map((d: any) => ({
+          setFocusChart({
+            symbol: targetFocusSym,
+            data: chartRes.map((d: any) => ({
               time: d.date,
               value: Number(d.close),
-            }))
-          );
+            })),
+          });
+        } else {
+          setFocusChart({ symbol: targetFocusSym, data: [] });
         }
       } catch {
-        // Ignore chart error
+        setFocusChart({ symbol: targetFocusSym, data: [] });
       }
     } finally {
       setLoading(false);
@@ -282,19 +317,24 @@ export default function TodayPage() {
     };
   }, [overview, watchlistQuotes]);
 
-  // Focus stock for "On Your Radar" derived from ranked radar items if present
+  // Finding 3: Focus stock for "On Your Radar" strictly bound to focusChart.symbol to prevent instrument drift
   const topRadar = personalizedBrief?.radar_items?.[0];
-  const focusSymbol = topRadar?.symbol || (watchlistSymbols && watchlistSymbols.length > 0 ? watchlistSymbols[0] : 'RELIANCE');
+  const focusSymbol = focusChart?.symbol || topRadar?.symbol || (watchlistSymbols && watchlistSymbols.length > 0 ? watchlistSymbols[0] : 'RELIANCE');
   const focusQuote = watchlistQuotes[focusSymbol];
-  const focusPrice = topRadar?.price ?? (typeof focusQuote?.price === 'number' ? focusQuote.price : null);
-  const focusChange = topRadar?.change_pct ?? (typeof (focusQuote?.change_percent ?? focusQuote?.change_pct) === 'number'
+  const focusPrice = (focusQuote && typeof focusQuote.price === 'number')
+    ? focusQuote.price
+    : (topRadar?.symbol === focusSymbol ? topRadar?.price : null);
+  const focusChange = (focusQuote && typeof (focusQuote.change_percent ?? focusQuote.change_pct) === 'number')
     ? (focusQuote.change_percent ?? focusQuote.change_pct)
-    : null);
+    : (topRadar?.symbol === focusSymbol ? topRadar?.change_pct : null);
   const isFocusUp = (focusChange ?? 0) >= 0;
-  const focusMeta = NIFTY50_META[focusSymbol] || { name: topRadar?.name || `${focusSymbol} Ltd`, sector: topRadar?.sector || 'Equity' };
-  const focusWhy = topRadar?.why || 'Moving averages and volume tracking provide primary support levels.';
-  const focusEvidence = topRadar?.evidence || null;
-  const focusRisk = topRadar?.risk || null;
+  const focusMeta = NIFTY50_META[focusSymbol] || {
+    name: (topRadar?.symbol === focusSymbol ? topRadar?.name : null) || `${focusSymbol} Ltd`,
+    sector: (topRadar?.symbol === focusSymbol ? topRadar?.sector : null) || 'Equity',
+  };
+  const focusWhy = (topRadar?.symbol === focusSymbol ? topRadar?.why : null) || 'Moving averages and volume tracking provide primary support levels.';
+  const focusEvidence = (topRadar?.symbol === focusSymbol ? topRadar?.evidence : null) || null;
+  const focusRisk = (topRadar?.symbol === focusSymbol ? topRadar?.risk : null) || null;
 
   // Data-driven "Worth Your Attention"
   const attentionItems = useMemo(() => {
@@ -426,22 +466,20 @@ export default function TodayPage() {
           >
             <button
               onClick={() => handleModeChange('brief')}
-              className={`px-4 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${
-                mode === 'brief'
+              className={`px-4 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${mode === 'brief'
                   ? 'bg-white text-[#142B32] shadow-sm'
                   : 'text-[#60737A] hover:text-[#142B32]'
-              }`}
+                }`}
               aria-pressed={mode === 'brief'}
             >
               Quick brief
             </button>
             <button
               onClick={() => handleModeChange('analyst')}
-              className={`px-4 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${
-                mode === 'analyst'
+              className={`px-4 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${mode === 'analyst'
                   ? 'bg-white text-[#142B32] shadow-sm'
                   : 'text-[#60737A] hover:text-[#142B32]'
-              }`}
+                }`}
               aria-pressed={mode === 'analyst'}
             >
               Analyst view
@@ -468,9 +506,8 @@ export default function TodayPage() {
             return (
               <div
                 key={idx.symbol || i}
-                className={`flex items-center justify-between px-3 ${
-                  i !== 0 ? 'border-l border-[#E1E7E8]' : 'pl-0'
-                }`}
+                className={`flex items-center justify-between px-3 ${i !== 0 ? 'border-l border-[#E1E7E8]' : 'pl-0'
+                  }`}
               >
                 <div>
                   <div className="text-xs text-[#687A81] mb-0.5 truncate">{idx.name || idx.symbol}</div>
@@ -495,9 +532,8 @@ export default function TodayPage() {
                 <div className="flex flex-col items-end gap-1">
                   {isAvail && chg !== null ? (
                     <span
-                      className={`text-xs font-mono font-medium flex items-center ${
-                        isUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
-                      }`}
+                      className={`text-xs font-mono font-medium flex items-center ${isUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
+                        }`}
                     >
                       {isUp ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
                       {formatPercent(chg)}
@@ -522,9 +558,8 @@ export default function TodayPage() {
       <div className="flex flex-wrap items-center justify-between text-xs text-[#687A81] bg-[#FAFBFB] p-3 rounded-[10px] border border-[#E1E7E8] gap-2">
         <div className="flex items-center gap-2">
           <span
-            className={`w-2 h-2 rounded-full ${
-              sessionInfo.open ? 'bg-[#087F73]' : 'bg-[#BB4B48]'
-            }`}
+            className={`w-2 h-2 rounded-full ${sessionInfo.open ? 'bg-[#087F73]' : 'bg-[#BB4B48]'
+              }`}
           />
           <span className="font-semibold text-[#142B32]">
             {sessionInfo.open ? 'NSE Open' : 'Market Closed'}
@@ -618,9 +653,8 @@ export default function TodayPage() {
                   </div>
                   <div>
                     <span className="text-[#64806F] text-[10px] block">Day Return</span>
-                    <strong className={`text-xs font-mono font-semibold ${
-                      (personalizedBrief.portfolio_exposure.day_pnl ?? 0) >= 0 ? 'text-[#087F73]' : 'text-[#BB4B48]'
-                    }`}>
+                    <strong className={`text-xs font-mono font-semibold ${(personalizedBrief.portfolio_exposure.day_pnl ?? 0) >= 0 ? 'text-[#087F73]' : 'text-[#BB4B48]'
+                      }`}>
                       {(personalizedBrief.portfolio_exposure.day_pnl ?? 0) >= 0 ? '+' : ''}
                       {formatINR(personalizedBrief.portfolio_exposure.day_pnl, 0)}
                     </strong>
@@ -731,9 +765,8 @@ export default function TodayPage() {
               </strong>
               {focusChange !== null ? (
                 <span
-                  className={`text-xs font-mono font-medium ${
-                    isFocusUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
-                  }`}
+                  className={`text-xs font-mono font-medium ${isFocusUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
+                    }`}
                 >
                   {formatPercent(focusChange)} today
                 </span>
@@ -742,18 +775,18 @@ export default function TodayPage() {
               )}
             </div>
 
-            {/* Trajectory visualization */}
+            {/* Trajectory visualization strictly matched to focusSymbol */}
             <div className="h-16 w-full my-3 flex items-center justify-center bg-[#FAFBFB] rounded-[8px] border border-[#E1E7E8] overflow-hidden">
-              {focusChart.length >= 2 ? (
+              {focusChart && focusChart.symbol === focusSymbol && focusChart.data.length >= 2 ? (
                 <svg className="w-full h-full p-1" viewBox="0 0 360 60" preserveAspectRatio="none">
                   {(() => {
-                    const vals = focusChart.map((c) => c.value);
+                    const vals = focusChart.data.map((c) => c.value);
                     const min = Math.min(...vals);
                     const max = Math.max(...vals);
                     const range = max - min || 1;
-                    const pts = focusChart
+                    const pts = focusChart.data
                       .map((c, idx) => {
-                        const x = (idx / (focusChart.length - 1)) * 360;
+                        const x = (idx / (focusChart.data.length - 1)) * 360;
                         const y = 55 - ((c.value - min) / range) * 50;
                         return `${x.toFixed(1)},${y.toFixed(1)}`;
                       })
@@ -772,7 +805,7 @@ export default function TodayPage() {
                 </svg>
               ) : (
                 <span className="text-[11px] text-[#899DA3]">
-                  {focusQuote ? '30-day price trend ready' : 'Loading trajectory…'}
+                  {focusQuote ? `${focusSymbol} 30-day price trend ready` : `Loading ${focusSymbol} trajectory…`}
                 </span>
               )}
             </div>
@@ -826,8 +859,8 @@ export default function TodayPage() {
                   {watchlistSymbols === null
                     ? 'Loading followed companies…'
                     : followedList.length === 0
-                    ? 'No companies followed yet'
-                    : `Tracking ${followedList.length} companies in your workspace`}
+                      ? 'No companies followed yet'
+                      : `Tracking ${followedList.length} companies in your workspace`}
                 </p>
               </div>
               <Link
@@ -910,13 +943,12 @@ export default function TodayPage() {
                               {typeof price === 'number' ? formatINR(price, 2) : '—'}
                             </div>
                             <div
-                              className={`text-xs ${
-                                chg !== null
+                              className={`text-xs ${chg !== null
                                   ? isUp
                                     ? 'text-[#087F73]'
                                     : 'text-[#BB4B48]'
                                   : 'text-[#899DA3]'
-                              }`}
+                                }`}
                             >
                               {chg !== null ? formatPercent(chg) : 'Unavailable'}
                             </div>
