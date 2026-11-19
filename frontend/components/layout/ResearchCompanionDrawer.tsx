@@ -29,16 +29,22 @@ export function ResearchCompanionDrawer() {
   const [lastFailedQuestion, setLastFailedQuestion] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const symbolRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    symbolRef.current = symbol;
+  }, [symbol]);
 
   useEffect(() => {
     const handleOpen = (e: Event) => {
       const custom = e as CustomEvent<{ symbol?: string; question?: string }>;
       setIsOpen(true);
-      if (custom.detail?.symbol) {
-        setSymbol(custom.detail.symbol);
-      }
+      const incomingSymbol = custom.detail?.symbol || null;
+      setSymbol(incomingSymbol);
+      symbolRef.current = incomingSymbol;
+
       if (custom.detail?.question) {
-        handleAsk(custom.detail.question);
+        handleAsk(custom.detail.question, incomingSymbol);
       }
       setTimeout(() => inputRef.current?.focus(), 150);
     };
@@ -61,8 +67,10 @@ export function ResearchCompanionDrawer() {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  const handleAsk = async (question: string) => {
+  const handleAsk = async (question: string, explicitSymbol?: string | null) => {
     if (!question.trim() || loading) return;
+
+    const activeSymbol = explicitSymbol !== undefined ? explicitSymbol : symbolRef.current;
 
     const userMsg: AssistantMessage = {
       id: `u-${Date.now()}`,
@@ -92,8 +100,8 @@ export function ResearchCompanionDrawer() {
 
       // Prepend active company context if relevant
       const outgoingPrompt =
-        symbol && !question.toLowerCase().includes(symbol.toLowerCase())
-          ? `[Context: ${symbol} NSE] ${question}`
+        activeSymbol && !question.toLowerCase().includes(activeSymbol.toLowerCase())
+          ? `[Context: ${activeSymbol} NSE] ${question}`
           : question;
 
       const res = await api.sendMessage(outgoingPrompt);
@@ -138,15 +146,15 @@ export function ResearchCompanionDrawer() {
 
   const suggestions = symbol
     ? [
-        `Explain the ${symbol} trend and momentum trade-off`,
-        `What are the primary risk factors for ${symbol}?`,
-        `What supporting technical evidence exists for ${symbol}?`,
-      ]
+      `Explain the ${symbol} trend and momentum trade-off`,
+      `What are the primary risk factors for ${symbol}?`,
+      `What supporting technical evidence exists for ${symbol}?`,
+    ]
     : [
-        'Why are Indian IT stocks moving together?',
-        'What should I check before opening a position?',
-        'Summarize the current market breadth and divergence',
-      ];
+      'Why are Indian IT stocks moving together?',
+      'What should I check before opening a position?',
+      'Summarize the current market breadth and divergence',
+    ];
 
   if (!isOpen) return null;
 
@@ -213,13 +221,12 @@ export function ResearchCompanionDrawer() {
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={`p-3.5 rounded-[10px] text-sm ${
-                  m.role === 'user'
+                className={`p-3.5 rounded-[10px] text-sm ${m.role === 'user'
                     ? 'bg-[#142B32] text-white ml-6'
                     : m.type === 'system'
-                    ? 'bg-[#FAF3E5] border border-[#EEE2C6] text-[#8B734D] mr-4'
-                    : 'bg-[#EAF2EC] border border-[#D8E5DE] text-[#142B32] mr-4'
-                }`}
+                      ? 'bg-[#FAF3E5] border border-[#EEE2C6] text-[#8B734D] mr-4'
+                      : 'bg-[#EAF2EC] border border-[#D8E5DE] text-[#142B32] mr-4'
+                  }`}
               >
                 {m.type === 'generated' && (
                   <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#087F73] mb-1">

@@ -86,10 +86,12 @@ export default function SettingsPage() {
     const currentUser = auth.getUser();
     setUser(currentUser);
 
-    // Read research mode
+    // Read research mode & auto-refresh preference
     try {
       const mode = localStorage.getItem('stockai_research_mode');
       if (mode === 'analyst' || mode === 'brief') setResearchMode(mode);
+      const autoRef = localStorage.getItem('stockai_auto_refresh_quotes');
+      if (autoRef !== null) setAutoRefreshQuotes(autoRef === 'true');
     } catch {}
 
     // Restore risk settings scoped to current user
@@ -245,16 +247,16 @@ export default function SettingsPage() {
         <button
           onClick={handleSaveAll}
           disabled={isSaving}
-          className="px-4 py-2 bg-[#087F73] hover:bg-[#06685e] text-white rounded-[7px] text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 self-start sm:self-auto"
+          className="px-4 py-2 bg-[#087F73] hover:bg-[#06685e] text-white rounded-[7px] text-sm font-semibold flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 self-start sm:self-auto"
         >
           {savedSuccess ? (
             <>
-              <Check className="w-3.5 h-3.5 text-white" />
+              <Check className="w-4 h-4 text-white" />
               <span>Settings Saved</span>
             </>
           ) : isSaving ? (
             <>
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <RefreshCw className="w-4 h-4 animate-spin" />
               <span>Saving…</span>
             </>
           ) : (
@@ -279,13 +281,13 @@ export default function SettingsPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as SettingsTab)}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-[6px] text-sm font-semibold transition-all ${
                 isActive
                   ? 'bg-white text-[#142B32] shadow-sm'
                   : 'text-[#60737A] hover:text-[#142B32]'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
+              <Icon className="w-4 h-4" />
               <span>{tab.label}</span>
             </button>
           );
@@ -323,9 +325,9 @@ export default function SettingsPage() {
             <p className="text-xs text-[#687A81]">Sign out to invalidate active session tokens.</p>
             <button
               onClick={handleSignOut}
-              className="px-3.5 py-1.5 bg-[#FAF3E5] hover:bg-[#F5EAD4] border border-[#EEE2C6] text-[#BB4B48] rounded-[7px] text-xs font-semibold flex items-center gap-1.5"
+              className="px-3.5 py-1.5 bg-[#FAF3E5] hover:bg-[#F5EAD4] border border-[#EEE2C6] text-[#BB4B48] rounded-[7px] text-sm font-semibold flex items-center gap-1.5"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              <LogOut className="w-4 h-4" />
               <span>Sign Out</span>
             </button>
           </div>
@@ -349,16 +351,16 @@ export default function SettingsPage() {
               <div className="flex items-center gap-1 p-1 bg-[#EEF2F2] rounded-[7px] border border-[#E1E7E8]">
                 <button
                   onClick={() => setResearchMode('brief')}
-                  className={`px-3 py-1 rounded-[5px] text-xs font-semibold ${
-                    researchMode === 'brief' ? 'bg-white text-[#142B32] shadow-sm' : 'text-[#60737A]'
+                  className={`px-3 py-1.5 rounded-[5px] text-sm font-medium ${
+                    researchMode === 'brief' ? 'bg-white text-[#142B32] shadow-sm font-semibold' : 'text-[#60737A]'
                   }`}
                 >
                   Quick brief
                 </button>
                 <button
                   onClick={() => setResearchMode('analyst')}
-                  className={`px-3 py-1 rounded-[5px] text-xs font-semibold ${
-                    researchMode === 'analyst' ? 'bg-white text-[#142B32] shadow-sm' : 'text-[#60737A]'
+                  className={`px-3 py-1.5 rounded-[5px] text-sm font-medium ${
+                    researchMode === 'analyst' ? 'bg-white text-[#142B32] shadow-sm font-semibold' : 'text-[#60737A]'
                   }`}
                 >
                   Analyst view
@@ -374,7 +376,7 @@ export default function SettingsPage() {
               <select
                 value={orderProductDefault}
                 onChange={(e) => setOrderProductDefault(e.target.value as any)}
-                className="bg-white border border-[#E1E7E8] text-[#142B32] text-xs font-semibold rounded-[7px] px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#087F73]/20"
+                className="bg-white border border-[#E1E7E8] text-[#142B32] text-sm font-semibold rounded-[7px] px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#087F73]/20"
               >
                 <option value="CNC">CNC (Delivery)</option>
                 <option value="MIS">MIS (Intraday)</option>
@@ -390,7 +392,14 @@ export default function SettingsPage() {
                 <input
                   type="checkbox"
                   checked={autoRefreshQuotes}
-                  onChange={(e) => setAutoRefreshQuotes(e.target.checked)}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setAutoRefreshQuotes(val);
+                    try {
+                      localStorage.setItem('stockai_auto_refresh_quotes', String(val));
+                      window.dispatchEvent(new CustomEvent('quotes-preference-changed', { detail: { autoRefresh: val } }));
+                    } catch {}
+                  }}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-[#D8E2E4] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#087F73]" />

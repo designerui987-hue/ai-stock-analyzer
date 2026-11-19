@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
-import { isDbConnectionError, getFallbackAlertPref, updateFallbackAlertPref } from '@/lib/db-fallback';
+import { isDbConnectionError } from '@/lib/db-fallback';
 import { z } from 'zod';
 
 const PreferencesPostSchema = z.object({
@@ -77,15 +77,13 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (isDbConnectionError(err)) {
-      const pref = getFallbackAlertPref(userId);
-      return NextResponse.json({
-        success: true,
-        preference: pref,
-        source: 'local_storage_fallback',
-      });
-    }
     console.error('Fetch preferences error:', err);
+    if (isDbConnectionError(err)) {
+      return NextResponse.json(
+        { success: false, error: 'Alert preferences database connection is temporarily unavailable.', unavailable: true },
+        { status: 503 }
+      );
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
@@ -150,15 +148,13 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (isDbConnectionError(err)) {
-      const pref = updateFallbackAlertPref(userId, bodyData);
-      return NextResponse.json({
-        success: true,
-        preference: pref,
-        source: 'local_storage_fallback',
-      });
-    }
     console.error('Update preferences error:', err);
+    if (isDbConnectionError(err)) {
+      return NextResponse.json(
+        { success: false, error: 'Alert preferences database connection is temporarily unavailable. Changes not persisted.', unavailable: true },
+        { status: 503 }
+      );
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

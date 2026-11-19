@@ -63,6 +63,7 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
   const [paperPositions, setPaperPositions] = useState<PaperPosition[]>([]);
   const [brokerConnected, setBrokerConnected] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
 
   // Form State
@@ -87,6 +88,9 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
 
       if (portRes && Array.isArray(portRes.holdings)) {
         setPortfolio(portRes);
+        setPortfolioError(null);
+      } else if (!portRes) {
+        setPortfolioError('Portfolio service is temporarily unavailable. Please retry.');
       }
 
       if (paperAccountRes?.success && paperAccountRes?.account?.positions) {
@@ -413,8 +417,27 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
         </section>
       )}
 
+      {/* ── Error State ─────────────────────────────────────────────────── */}
+      {activeTab !== 'BROKER' && !loading && portfolioError && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
+          <div className="w-14 h-14 rounded-xl bg-[#FAF3F0] text-[#BB4B48] border border-[#BB4B48]/30 mx-auto flex items-center justify-center">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-[20px] font-semibold text-[#142B32]">Unable to load portfolio</h2>
+            <p className="text-xs text-[#687A81] max-w-sm mx-auto mt-2 leading-relaxed">{portfolioError}</p>
+          </div>
+          <button
+            onClick={() => fetchPortfolioData()}
+            className="px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[8px] text-xs font-semibold"
+          >
+            Retry
+          </button>
+        </section>
+      )}
+
       {/* ── Empty State for Manual / Paper ──────────────────────────────── */}
-      {activeTab !== 'BROKER' && !loading && !hasHoldings && (
+      {activeTab !== 'BROKER' && !loading && !portfolioError && !hasHoldings && (
         <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
           <div className="w-14 h-14 rounded-xl bg-[#F0F5F3] text-[#087F73] border border-[#E1E7E8] mx-auto flex items-center justify-center">
             <Briefcase className="w-6 h-6" />

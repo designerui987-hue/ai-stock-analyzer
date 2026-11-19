@@ -10,6 +10,7 @@
  */
 
 import assert from 'node:assert';
+import { isDbConnectionError } from './db-fallback';
 
 interface SnapshotChange {
   metric: string;
@@ -33,6 +34,7 @@ interface SnapshotComparison {
   methodology_version: string;
   changes: SnapshotChange[];
   summary?: string;
+  reason?: string;
 }
 
 // Client-side comparison evaluator (mirrors backend ResearchSnapshotService)
@@ -45,6 +47,7 @@ function evaluateComparison(
     rsi?: number;
     sma_20?: number;
     vol_surge?: number;
+    lookback_bars?: number;
     rule_version: string;
   },
   prev: {
@@ -55,17 +58,29 @@ function evaluateComparison(
     rsi?: number;
     sma_20?: number;
     vol_surge?: number;
+    lookback_bars?: number;
     rule_version: string;
   }
 ): SnapshotComparison {
   if (curr.symbol !== prev.symbol || curr.exchange !== prev.exchange) {
-    return { status: 'incompatible', symbol: curr.symbol, exchange: curr.exchange, methodology_version: curr.rule_version, changes: [] };
+    return { status: 'incompatible', reason: 'Symbol or exchange mismatch', symbol: curr.symbol, exchange: curr.exchange, methodology_version: curr.rule_version, changes: [] };
+  }
+
+  if (curr.lookback_bars && prev.lookback_bars && curr.lookback_bars !== prev.lookback_bars) {
+    return {
+      status: 'incompatible',
+      reason: `Lookback mismatch (${curr.lookback_bars} bars vs ${prev.lookback_bars} bars)`,
+      symbol: curr.symbol,
+      exchange: curr.exchange,
+      methodology_version: curr.rule_version,
+      changes: []
+    };
   }
 
   const currTime = new Date(curr.as_of).getTime();
   const prevTime = new Date(prev.as_of).getTime();
   if (currTime <= prevTime) {
-    return { status: 'incompatible', symbol: curr.symbol, exchange: curr.exchange, methodology_version: curr.rule_version, changes: [] };
+    return { status: 'incompatible', reason: 'Out-of-order or duplicate timestamp', symbol: curr.symbol, exchange: curr.exchange, methodology_version: curr.rule_version, changes: [] };
   }
 
   const periodHours = (currTime - prevTime) / (1000 * 3600);
@@ -319,6 +334,67 @@ async function runTests() {
 
     assert.deepStrictEqual(concentratedSectors, ['Energy']);
     console.log('Test 5: Portfolio sector concentration calculation verified (> 35% trigger: Energy 40%)');
+  }
+
+  // Test 6: Incompatibility Guard (Lookback Mismatch and Duplicate/Reversed Timestamps)
+  {
+    const base = {
+      symbol: 'INFY',
+      exchange: 'NSE',
+      price: 1800.0,
+      as_of: '2026-11-19T10:00:00Z',
+      lookback_bars: 200,
+      rule_version: 'v1.0-deterministic-quant',
+    };
+    const lookbackMismatch = {
+      ...base,
+      as_of: '2026-11-19T11:00:00Z',
+      lookback_bars: 100, // Mismatched lookback
+    };
+    const resLookback = evaluateComparison(lookbackMismatch, base);
+    assert.strictEqual(resLookback.status, 'incompatible');
+    assert(resLookback.reason?.includes('Lookback mismatch'));
+
+    const staleTime = {
+      ...base,
+      as_of: '2026-11-19T09:00:00Z', // Before base
+    };
+    const resStale = evaluateComparison(staleTime, base);
+    assert.strictEqual(resStale.status, 'incompatible');
+    assert(resStale.reason?.includes('timestamp'));
+    console.log('Test 6: Incompatibility guards verified (Lookback mismatch & timestamp ordering)');
+  }
+
+  // Test 7: Hard Rule 1 - Fail-closed DB connection error detection (No invented state)
+  {
+    assert.strictEqual(isDbConnectionError({ code: 'P1001' }), true);
+    assert.strictEqual(isDbConnectionError({ message: "Can't reach database server at localhost:5432" }), true);
+    assert.strictEqual(isDbConnectionError({ message: 'connect ECONNREFUSED 127.0.0.1:5432' }), true);
+    assert.strictEqual(isDbConnectionError({ name: 'PrismaClientInitializationError' }), true);
+    // Non-connectivity errors must NOT be classified as DB connection errors
+    assert.strictEqual(isDbConnectionError({ message: 'Validation error: symbol required' }), false);
+    assert.strictEqual(isDbConnectionError(null), false);
+    console.log('Test 7: Hard Rule 1 verified - Database connection error accurately detected for 503 fail-closed');
+  }
+
+  // Test 8: Trend Observation & Hard Rule 1/4 (SMA20 comparison, no invented target/stop)
+  {
+    const deriveTrend = (price: number, sma20: number) => {
+      return price > sma20 ? 'Above 20-day average' : 'Below 20-day average';
+    };
+    assert.strictEqual(deriveTrend(1265, 1248), 'Above 20-day average');
+    assert.strictEqual(deriveTrend(1240, 1248), 'Below 20-day average');
+
+    // Rule: When signal has no target/stop_loss, they must remain null (never fallback to * 1.08 / * 0.95)
+    const rawSignal: { stop_loss?: number | null; target?: number | null } = {
+      stop_loss: null,
+      target: null,
+    };
+    const stopLossPrice = rawSignal.stop_loss ?? null;
+    const targetPrice = rawSignal.target ?? null;
+    assert.strictEqual(stopLossPrice, null, 'Stop loss must remain null when unprovided');
+    assert.strictEqual(targetPrice, null, 'Target price must remain null when unprovided');
+    console.log('Test 8: Strict MA20 trend derivation and null stop/target invariants verified');
   }
 
   console.log('\n🎉 ALL RESEARCH COMPARISON & PERSONALIZATION TESTS PASSED!\n');

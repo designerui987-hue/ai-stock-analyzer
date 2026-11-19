@@ -76,6 +76,8 @@ export default function CompanyResearchPage() {
     async function loadStockData() {
       try {
         setLoading(true);
+        setUserHolding(null);
+        setWatchlisted(false);
 
         // Check watchlist & user holdings for personalized exposure
         if (auth.isAuthenticated()) {
@@ -90,7 +92,9 @@ export default function CompanyResearchPage() {
               setPortfolioSummary(res);
               if (Array.isArray(res.holdings)) {
                 const match = res.holdings.find((h: any) => h.symbol.toUpperCase() === symbol);
-                if (match) setUserHolding(match);
+                setUserHolding(match || null);
+              } else {
+                setUserHolding(null);
               }
             }
           }).catch(() => {});
@@ -110,7 +114,7 @@ export default function CompanyResearchPage() {
         // Fetch chart data
         fetchChart(selectedRange);
 
-        // SSE Real-time price stream
+        // SSE Real-time price stream: preserve verified tick metadata without promoting unknown data to LIVE
         unsubStream = api.subscribePriceStream([symbol], (payload: any) => {
           if (!isMounted || !payload || typeof payload !== 'object') return;
           const tick = payload[symbol];
@@ -120,9 +124,9 @@ export default function CompanyResearchPage() {
               price: Number(tick.price),
               change_percent: tick.change_percent ?? tick.change_pct ?? prev?.change_percent,
               change_pct: tick.change_percent ?? tick.change_pct ?? prev?.change_pct,
-              as_of: tick.as_of || new Date().toISOString(),
-              source: tick.source || prev?.source || 'NSE Live',
-              freshness: tick.freshness || 'LIVE',
+              as_of: tick.as_of || prev?.as_of || null,
+              source: tick.source || prev?.source || 'Kite WebSocket',
+              freshness: tick.freshness || prev?.freshness || 'UNAVAILABLE',
             }));
           }
         });
@@ -213,53 +217,80 @@ export default function CompanyResearchPage() {
   const sector = liveStock?.sector || (isDemoAllowed && matchedDemo?.sector) || 'Equities';
   const freshness = liveStock?.freshness || (isDemoAllowed ? 'DEMO' : 'UNAVAILABLE');
   const source = liveStock?.source || 'yfinance/NSE';
-  const asOf = liveStock?.as_of ? new Date(liveStock.as_of).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) + ' IST' : 'Market session';
+  const asOfRaw = liveStock?.as_of || null;
+  const asOfFormatted = liveStock?.as_of
+    ? new Date(liveStock.as_of).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) + ' IST'
+    : 'Market session';
 
   // Quantitative factors & deterministic thesis
   const ai = liveStock?.ai_prediction || liveStock?.ai_analysis || {};
   const tech = liveStock?.technicals || {};
+  const sma20 = typeof tech.sma_20 === 'number' ? tech.sma_20 : null;
+  const sma50 = typeof tech.sma_50 === 'number' ? tech.sma_50 : null;
+  const sma200 = typeof tech.sma_200 === 'number' ? tech.sma_200 : null;
+
+  // Factual moving average trend: compare price directly with SMA-20
+  const trend = (typeof currentPrice === 'number' && typeof sma20 === 'number')
+    ? (currentPrice > sma20 ? 'Above 20-day average' : (currentPrice < sma20 ? 'Below 20-day average' : 'At 20-day average'))
+    : 'Awaiting trend verification';
+
   const rsi: string | null = typeof tech.rsi === 'number' ? tech.rsi.toFixed(1) : null;
   const rsiNum = rsi ? Number(rsi) : null;
-  const trend = rsiNum !== null
-    ? (rsiNum > 65 ? 'Above 20-day average' : (rsiNum < 40 ? 'Below 20-day average' : 'Near 20-day average'))
-    : 'Awaiting trend verification';
-  const volumeRatio = typeof tech.vol_surge === 'number' ? `${tech.vol_surge.toFixed(1)}×` : (typeof tech.volume_ratio === 'number' ? `${tech.volume_ratio.toFixed(1)}×` : null);
+  const rsiZone = rsiNum !== null
+    ? (rsiNum > 70 ? 'Overbought (> 70)' : (rsiNum < 30 ? 'Oversold (< 30)' : 'Neutral momentum'))
+    : null;
+
+  const volumeRatio = typeof tech.vol_surge === 'number'
+    ? `${tech.vol_surge.toFixed(1)}×`
+    : (typeof tech.volume_ratio === 'number' ? `${tech.volume_ratio.toFixed(1)}×` : null);
   const signal = ai.signal || null;
 
-  // Fully data-driven summary, why, and risk points (no canned symbol hardcodes)
+  // Fully data-driven summary (no unverified backfilling from day change direction)
   const summary = signal === 'BUY'
     ? 'Quantitative rules indicate an improving trend with constructive momentum alignment.'
     : signal === 'SELL'
     ? 'Downward momentum detected across moving averages and technical filters.'
     : signal === 'HOLD'
     ? 'Mixed technical indicators. Price is consolidating near moving average bands.'
-    : (isUp ? 'A firmer intraday trend, with room to build momentum.' : 'Consolidation phase. Look for volume confirmation.');
+    : 'No active quantitative signal for this instrument. Observe technical indicators and market regime before acting.';
 
-  const why = rsi !== null
-    ? `Price is trading ${trend.toLowerCase()}${volumeRatio ? ` with volume tracking at ${volumeRatio} vs its 20-day average` : ''}. ${ai.rationale || 'Moving averages provide primary support zones.'}`
+  const whyParts: string[] = [];
+  if (typeof currentPrice === 'number' && typeof sma20 === 'number') {
+    whyParts.push(`Price is trading ${trend.toLowerCase()} (₹${currentPrice.toFixed(2)} vs ₹${sma20.toFixed(2)})`);
+  }
+  if (volumeRatio) {
+    whyParts.push(`volume tracking at ${volumeRatio} vs its 20-day average`);
+  }
+  if (rsiZone && rsi !== null) {
+    whyParts.push(`14-day RSI is at ${rsi} (${rsiZone.toLowerCase()})`);
+  }
+  const why = whyParts.length > 0
+    ? `${whyParts.join(', ')}. ${ai.rationale || 'Moving averages provide primary support and resistance zones.'}`
     : `Technical indicator calculation in progress. Awaiting historical bar verification for ${symbol}.`;
 
-  const risk = rsiNum !== null && rsiNum > 68
-    ? `RSI at ${rsi} indicates elevated short-term momentum; pullback risk toward the 20-day moving average is elevated.`
-    : rsiNum !== null && rsiNum < 38
-    ? `Weak technical momentum (RSI: ${rsi}). Confirm base-building and delivery support before initiating exposure.`
-    : ai.stop_loss
+  const risk = rsiNum !== null && rsiNum > 70
+    ? `14-day RSI is at ${rsi}, which is in the conventional overbought zone (> 70). Overbought conditions reflect strong momentum but can precede consolidation.`
+    : rsiNum !== null && rsiNum < 30
+    ? `14-day RSI is at ${rsi}, which is in the conventional oversold zone (< 30). Oversold readings reflect extended downward momentum.`
+    : typeof ai.stop_loss === 'number'
     ? `Rule-based stop loss is marked at ${formatINR(ai.stop_loss)}. Sector and benchmark volatility remain primary risk drivers.`
     : 'Maintain position sizing discipline. Quantitative rule agreement does not eliminate market risk.';
 
-  // Position sizing computation
+  // Position sizing computation: Strictly real rule values or null, NEVER invented 0.95 or 1.08 fallback
   const entryPrice = currentPrice || 0;
-  const stopLossPrice = ai.stop_loss || (currentPrice ? Number((currentPrice * 0.95).toFixed(2)) : 0);
-  const targetPrice = ai.target || ai.target_price || (currentPrice ? Number((currentPrice * 1.08).toFixed(2)) : 0);
+  const stopLossPrice: number | null = typeof ai.stop_loss === 'number' && ai.stop_loss > 0 ? ai.stop_loss : null;
+  const targetPrice: number | null = typeof (ai.target || ai.target_price) === 'number' && (ai.target || ai.target_price) > 0 ? (ai.target || ai.target_price) : null;
 
-  const sizingResult = calculatePositionSize({
-    account_capital: calcCapital,
-    risk_pct: calcRiskPct,
-    entry_price: entryPrice,
-    stop_loss_price: stopLossPrice,
-    target_price: targetPrice,
-    symbol,
-  });
+  const sizingResult = (stopLossPrice !== null && targetPrice !== null && entryPrice > 0)
+    ? calculatePositionSize({
+        account_capital: calcCapital,
+        risk_pct: calcRiskPct,
+        entry_price: entryPrice,
+        stop_loss_price: stopLossPrice,
+        target_price: targetPrice,
+        symbol,
+      })
+    : null;
 
   // Handle Order Placement (Paper Trading)
   const handlePlaceOrder = async (e: React.FormEvent) => {
@@ -268,7 +299,7 @@ export default function CompanyResearchPage() {
     setOrderMsg(null);
 
     try {
-      const idempotencyKey = `ord_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const idempotencyKey = `ord_${Date.now()}_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)}`;
       const res = await fetch('/api/broker/orders', {
         method: 'POST',
         headers: {
@@ -361,7 +392,7 @@ export default function CompanyResearchPage() {
               {changePct !== null ? `${formatPercent(changePct)} today` : 'Quote pending'}
             </span>
             <span className="text-[#899DA3]">·</span>
-            <FreshnessBadge status={freshness} asOf={asOf} source={source} />
+            <FreshnessBadge status={freshness} asOf={asOfRaw} source={source} />
           </div>
         </div>
       </div>
@@ -416,7 +447,7 @@ export default function CompanyResearchPage() {
                   <button
                     key={r}
                     onClick={() => handleRangeChange(r)}
-                    className={`px-2.5 py-1 rounded-[5px] text-xs font-medium transition-all ${
+                    className={`px-3 py-1 rounded-[5px] text-xs sm:text-sm font-medium transition-all ${
                       selectedRange === r
                         ? 'bg-white text-[#142B32] shadow-sm font-semibold'
                         : 'text-[#687A81] hover:text-[#142B32]'
@@ -433,7 +464,7 @@ export default function CompanyResearchPage() {
               {chartData.length > 0 ? (
                 <FinancialChart data={chartData} height={256} />
               ) : (
-                <div className="h-full flex items-center justify-center text-xs text-[#687A81]">
+                <div className="h-full flex items-center justify-center text-sm text-[#687A81]">
                   Loading {symbol} chart series...
                 </div>
               )}
@@ -459,11 +490,11 @@ export default function CompanyResearchPage() {
                       Progressive research picture with verified indicator comparisons and portfolio context.
                     </p>
                   </div>
-                  <div className="inline-flex items-center p-1 bg-[#F0F4F4] rounded-[8px] text-xs font-medium self-start sm:self-auto">
+                  <div className="inline-flex items-center p-1 bg-[#F0F4F4] rounded-[8px] text-sm font-medium self-start sm:self-auto">
                     <button
                       type="button"
                       onClick={() => setResearchView('quick')}
-                      className={`px-3 py-1 rounded-[6px] transition-colors ${
+                      className={`px-3.5 py-1.5 rounded-[6px] transition-colors ${
                         researchView === 'quick'
                           ? 'bg-white text-[#142B32] shadow-xs font-semibold'
                           : 'text-[#687A81] hover:text-[#142B32]'
@@ -474,7 +505,7 @@ export default function CompanyResearchPage() {
                     <button
                       type="button"
                       onClick={() => setResearchView('analyst')}
-                      className={`px-3 py-1 rounded-[6px] transition-colors ${
+                      className={`px-3.5 py-1.5 rounded-[6px] transition-colors ${
                         researchView === 'analyst'
                           ? 'bg-white text-[#142B32] shadow-xs font-semibold'
                           : 'text-[#687A81] hover:text-[#142B32]'
@@ -500,7 +531,7 @@ export default function CompanyResearchPage() {
                     <div className="p-3 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[8px] text-[11px] text-[#5C6E74] space-y-1 mt-2">
                       <div className="font-medium text-[#142B32]">Methodology & Model Scope</div>
                       <div>Engine: Deterministic Quantitative Consensus (v1.0-deterministic-quant)</div>
-                      <div>Input series: NSE Daily OHLCV bars via {source} · Bar timestamp: {asOf}</div>
+                      <div>Input series: NSE Daily OHLCV bars via {source} · Bar timestamp: {asOfFormatted}</div>
                       <div>Causation note: Mathematical indicator alignment reflects observed technical patterns; it does not infer unverified fundamental or corporate causation.</div>
                     </div>
                   )}
@@ -579,13 +610,22 @@ export default function CompanyResearchPage() {
                         </table>
                       </div>
                     )
+                  ) : liveStock?.what_changed?.status === 'incompatible' ? (
+                    <div className="p-3.5 bg-[#FAF3F0] border border-[#BB4B48]/30 rounded-[8px] text-xs text-[#BB4B48] flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-[#BB4B48] shrink-0" />
+                      <span>
+                        Historical comparison unavailable: {liveStock.what_changed.reason || 'Snapshots were recorded with differing methodology, lookback, or adjustment parameters.'}
+                      </span>
+                    </div>
                   ) : (
                     /* No Changes or No Prior Snapshot State */
                     <div className="p-3.5 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[8px] text-xs text-[#687A81] flex items-center gap-2">
                       <Info className="w-4 h-4 text-[#899DA3] shrink-0" />
                       <span>
                         {liveStock?.what_changed?.message ||
-                          'No material changes detected between recent snapshots. Technical indicators remain stable within normal volatility bands.'}
+                          (liveStock?.what_changed?.status === 'identical_observation'
+                            ? 'Observation timestamp matches comparison baseline; no new market events observed.'
+                            : 'No material changes detected between recent snapshots. Technical indicators remain within normal volatility bands.')}
                       </span>
                     </div>
                   )}
@@ -659,7 +699,12 @@ export default function CompanyResearchPage() {
                         <Shield className="w-3.5 h-3.5 text-[#087F73]" /> Information Limits & Stop Loss
                       </strong>
                       <p className="text-[#687A81] leading-relaxed">
-                        Stop-loss boundary is marked at <strong className="font-mono text-[#BB4B48]">{formatINR(stopLossPrice, 2)}</strong>. Fundamental announcements and order book depth are outside this technical snapshot.
+                        {stopLossPrice !== null ? (
+                          <>Stop-loss boundary is marked at <strong className="font-mono text-[#BB4B48]">{formatINR(stopLossPrice, 2)}</strong>.</>
+                        ) : (
+                          <>Rule-based stop loss is not specified for this observation. Maintain disciplined position sizing based on your individual risk parameters.</>
+                        )}{' '}
+                        Fundamental announcements and order book depth are outside this technical snapshot.
                       </p>
                     </div>
                   </div>
@@ -719,7 +764,7 @@ export default function CompanyResearchPage() {
                       </div>
                       <button
                         onClick={() => {
-                          setOrderQuantity(sizingResult.position_size_shares || 10);
+                          setOrderQuantity(sizingResult?.position_size_shares || 1);
                           setShowOrderModal(true);
                         }}
                         className="px-3 py-1.5 bg-[#142B32] hover:bg-[#1E3E47] text-white rounded-[6px] text-xs font-semibold shrink-0 transition-colors"
@@ -881,28 +926,34 @@ export default function CompanyResearchPage() {
                   <span className="text-[11px] text-[#687A81]">Risk-managed sizing</span>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-[#FAFBFB] p-4 rounded-[10px] border border-[#E1E7E8]">
-                  <div>
-                    <span className="text-[#687A81] block">Account Capital</span>
-                    <strong className="font-mono text-[#142B32]">{formatINR(calcCapital, 0)}</strong>
+                {sizingResult ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-[#FAFBFB] p-4 rounded-[10px] border border-[#E1E7E8]">
+                    <div>
+                      <span className="text-[#687A81] block">Account Capital</span>
+                      <strong className="font-mono text-[#142B32]">{formatINR(calcCapital, 0)}</strong>
+                    </div>
+                    <div>
+                      <span className="text-[#687A81] block">Risk Per Trade</span>
+                      <strong className="font-mono text-[#142B32]">{calcRiskPct}%</strong>
+                    </div>
+                    <div>
+                      <span className="text-[#687A81] block">Max Risk Amount</span>
+                      <strong className="font-mono text-[#BB4B48]">
+                        {formatINR(sizingResult.max_risk_amount, 0)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-[#687A81] block">Max Shares</span>
+                      <strong className="font-mono text-[#087F73]">
+                        {sizingResult.position_size_shares} shares
+                      </strong>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-[#687A81] block">Risk Per Trade</span>
-                    <strong className="font-mono text-[#142B32]">{calcRiskPct}%</strong>
+                ) : (
+                  <div className="p-3.5 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[8px] text-xs text-[#687A81]">
+                    Position sizing computation requires a quantitative signal with defined stop-loss and target parameters.
                   </div>
-                  <div>
-                    <span className="text-[#687A81] block">Max Risk Amount</span>
-                    <strong className="font-mono text-[#BB4B48]">
-                      {formatINR(sizingResult.max_risk_amount, 0)}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="text-[#687A81] block">Max Shares</span>
-                    <strong className="font-mono text-[#087F73]">
-                      {sizingResult.position_size_shares} shares
-                    </strong>
-                  </div>
-                </div>
+                )}
               </div>
             </section>
           )}
@@ -962,7 +1013,7 @@ export default function CompanyResearchPage() {
             {/* Paper Trading Order Trigger */}
             <button
               onClick={() => {
-                setOrderQuantity(sizingResult.position_size_shares || 10);
+                setOrderQuantity(sizingResult?.position_size_shares || 1);
                 setShowOrderModal(true);
               }}
               className="w-full py-2.5 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[7px] text-xs font-semibold flex items-center justify-center gap-2 transition-colors"

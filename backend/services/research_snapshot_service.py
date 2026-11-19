@@ -12,9 +12,10 @@ Responsibilities:
 
 from datetime import datetime, timezone, timedelta
 import logging
-from typing import Dict, List, Optional, Any
+import math
+from typing import Dict, List, Optional, Any, Union
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, text, and_, or_
 
 from db.models import ResearchSnapshot, WatchlistItem, Holding, Portfolio
 from data.demo_stocks import NIFTY50_STOCKS
@@ -35,22 +36,26 @@ class ResearchSnapshotService:
     """Service for research snapshots, 'What Changed' comparison, and personalized radar."""
 
     @staticmethod
-    def _parse_datetime(val: Any) -> datetime:
-        """Parse datetime object or ISO string to timezone-aware UTC datetime."""
+    def _parse_datetime(val: Any) -> Optional[datetime]:
+        """
+        Parse datetime object or ISO string to timezone-aware UTC datetime.
+        Returns None if missing or malformed; NEVER silently falls back to current time.
+        """
+        if val is None:
+            return None
         if isinstance(val, datetime):
             if val.tzinfo is None:
                 return val.replace(tzinfo=timezone.utc)
             return val.astimezone(timezone.utc)
         if isinstance(val, str) and val.strip():
             try:
-                # Handle standard ISO strings (including with Z or offset)
                 dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
                 if dt.tzinfo is None:
                     return dt.replace(tzinfo=timezone.utc)
                 return dt.astimezone(timezone.utc)
             except Exception:
-                pass
-        return datetime.now(timezone.utc)
+                return None
+        return None
 
     @staticmethod
     def record_snapshot(
@@ -60,33 +65,51 @@ class ResearchSnapshotService:
         technicals: Optional[dict] = None,
         ai_prediction: Optional[dict] = None,
         exchange: str = "NSE",
-        user_id: Optional[int] = None,
+        user_id: Optional[Union[int, str]] = None,
         rule_version: str = DEFAULT_METHODOLOGY_VERSION,
+        timeframe: Optional[str] = None,
+        lookback_bars: Optional[int] = None,
+        adjustment_basis: Optional[str] = None,
     ) -> Optional[ResearchSnapshot]:
         """
         Record a validated quantitative snapshot to PostgreSQL/SQLite.
-        Prunes historical snapshots older than the retention limit (30).
+        Rejects invalid timestamps, stale quotes, non-finite numbers, and future timestamps.
+        Preserves multi-session daily baselines independently from intraday tick noise.
         """
         clean_sym = symbol.strip().upper()
         clean_ex = exchange.strip().upper()
         price = quote_data.get("price")
 
-        # Validate that price is numeric and strictly positive
-        if not isinstance(price, (int, float)) or price <= 0:
+        # 1. Validate that price is finite numeric and strictly positive
+        if not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
             return None
 
-        as_of = ResearchSnapshotService._parse_datetime(quote_data.get("as_of") or quote_data.get("exchange_timestamp"))
+        # 2. Reject stale or explicitly unavailable quotes
+        freshness = str(quote_data.get("freshness") or "").upper()
+        if freshness in ("STALE", "UNAVAILABLE") or quote_data.get("status") == "unavailable":
+            return None
+
+        # 3. Validate observation timestamp strictly (never fabricate from server receipt time)
+        raw_as_of = quote_data.get("as_of") or quote_data.get("exchange_timestamp")
+        as_of = ResearchSnapshotService._parse_datetime(raw_as_of)
+        if as_of is None:
+            return None
+
         tech = technicals or {}
         ai = ai_prediction or {}
 
-        # Safely extract numeric technical values (None if missing/unavailable, NEVER 0.0)
+        # Safely extract finite numeric technical values (None if missing/unavailable, NEVER 0.0 or inf/nan)
         def _get_float(d: dict, k: str) -> Optional[float]:
             v = d.get(k)
-            return float(v) if isinstance(v, (int, float)) else None
+            if isinstance(v, (int, float)) and math.isfinite(v):
+                return float(v)
+            return None
 
         def _get_int(d: dict, k: str) -> Optional[int]:
             v = d.get(k)
-            return int(v) if isinstance(v, (int, float)) else None
+            if isinstance(v, (int, float)) and math.isfinite(v):
+                return int(v)
+            return None
 
         rsi = _get_float(tech, "rsi")
         sma20 = _get_float(tech, "sma_20")
@@ -102,10 +125,13 @@ class ResearchSnapshotService:
         if signal not in ("BUY", "HOLD", "SELL"):
             signal = None
 
-        source = quote_data.get("source") or "yfinance/NSE"
+        tf = timeframe or tech.get("timeframe") or DEFAULT_TIMEFRAME
+        lb = lookback_bars or tech.get("lookback_bars") or DEFAULT_LOOKBACK_BARS
+        adj = adjustment_basis or tech.get("adjustment_basis") or quote_data.get("adjustment_basis") or DEFAULT_ADJUSTMENT_BASIS
+        source = quote_data.get("source") or tech.get("source") or "yfinance/NSE"
 
         try:
-            # 1. Check for duplicate exact observation timestamp
+            # 1. Exact observation timestamp deduplication
             existing = (
                 db.query(ResearchSnapshot)
                 .filter(
@@ -119,8 +145,9 @@ class ResearchSnapshotService:
             if existing:
                 return existing
 
-            # 2. Anti-Refresh Deduplication: Prevent rapid page refreshes from consuming history
-            # If the latest recorded snapshot has the same price within 5 minutes, reuse it.
+            # 2. Material-Content Deduplication:
+            # If within 5 minutes, reuse the latest snapshot ONLY if all material indicators are unchanged.
+            # If price changed >= 0.5%, or RSI shifted, or MA crossed, or signal changed -> record new snapshot!
             latest = (
                 db.query(ResearchSnapshot)
                 .filter(
@@ -133,9 +160,32 @@ class ResearchSnapshotService:
             )
             if latest:
                 latest_as_of = ResearchSnapshotService._parse_datetime(latest.as_of)
-                time_diff = abs((as_of - latest_as_of).total_seconds())
-                if time_diff < MIN_SNAPSHOT_INTERVAL_SECONDS and abs(float(price) - latest.price) < 0.001:
-                    return latest
+                if latest_as_of:
+                    time_diff = abs((as_of - latest_as_of).total_seconds())
+                    if time_diff < MIN_SNAPSHOT_INTERVAL_SECONDS:
+                        price_diff_pct = abs(float(price) - latest.price) / latest.price * 100.0
+                        
+                        # Material change checks
+                        price_material = price_diff_pct >= 0.5
+                        rsi_material = False
+                        if rsi is not None and latest.rsi_14 is not None:
+                            rsi_material = (
+                                abs(rsi - latest.rsi_14) >= 5.0
+                                or (rsi > 70) != (latest.rsi_14 > 70)
+                                or (rsi < 30) != (latest.rsi_14 < 30)
+                            )
+                        elif (rsi is None) != (latest.rsi_14 is None):
+                            rsi_material = True
+
+                        ma_crossed = False
+                        if sma20 is not None and latest.sma_20 is not None:
+                            ma_crossed = (float(price) > sma20) != (latest.price > latest.sma_20)
+
+                        signal_changed = signal != latest.signal
+
+                        if not (price_material or rsi_material or ma_crossed or signal_changed):
+                            # Invariant: No material change within deduplication window
+                            return latest
 
             snapshot = ResearchSnapshot(
                 user_id=user_id,
@@ -157,16 +207,17 @@ class ResearchSnapshotService:
                 vol_surge=vol_surge,
                 signal=signal,
                 rule_version=rule_version,
-                timeframe=DEFAULT_TIMEFRAME,
-                lookback_bars=DEFAULT_LOOKBACK_BARS,
-                adjustment_basis=DEFAULT_ADJUSTMENT_BASIS,
+                timeframe=tf,
+                lookback_bars=lb,
+                adjustment_basis=adj,
                 source=source,
             )
             db.add(snapshot)
             db.commit()
             db.refresh(snapshot)
 
-            # Retention cleanup: Keep only the most recent MAX_SNAPSHOT_RETENTION_PER_SYMBOL
+            # 3. Retention Scoped Pruning:
+            # Keeps strictly up to MAX_SNAPSHOT_RETENTION_PER_SYMBOL (30) snapshots per user/symbol.
             all_snapshots = (
                 db.query(ResearchSnapshot.id)
                 .filter(
@@ -177,6 +228,7 @@ class ResearchSnapshotService:
                 .order_by(desc(ResearchSnapshot.as_of))
                 .all()
             )
+
             if len(all_snapshots) > MAX_SNAPSHOT_RETENTION_PER_SYMBOL:
                 surplus_ids = [s[0] for s in all_snapshots[MAX_SNAPSHOT_RETENTION_PER_SYMBOL:]]
                 db.query(ResearchSnapshot).filter(ResearchSnapshot.id.in_(surplus_ids)).delete(synchronize_session=False)
@@ -226,8 +278,34 @@ class ResearchSnapshotService:
                 "reason": f"Adjustment basis mismatch: {curr_adj} vs {prev_adj}.",
             }
 
+        curr_lb = getattr(curr, "lookback_bars", DEFAULT_LOOKBACK_BARS)
+        prev_lb = getattr(prev, "lookback_bars", DEFAULT_LOOKBACK_BARS)
+        if curr_lb is not None and prev_lb is not None and curr_lb != prev_lb:
+            return {
+                "status": "incompatible",
+                "reason": f"Lookback window mismatch: {curr_lb} bars vs {prev_lb} bars.",
+            }
+
+        curr_src = getattr(curr, "source", None)
+        prev_src = getattr(prev, "source", None)
+        source_note = None
+        if curr_src and prev_src and curr_src != prev_src:
+            source_note = f"Source transition: {prev_src} -> {curr_src}."
+
         curr_time = ResearchSnapshotService._parse_datetime(curr.as_of)
         prev_time = ResearchSnapshotService._parse_datetime(prev.as_of)
+
+        if not curr_time or not prev_time:
+            return {
+                "status": "incompatible",
+                "reason": "Missing or malformed observation timestamp.",
+            }
+
+        if curr_time < prev_time:
+            return {
+                "status": "incompatible",
+                "reason": f"Out-of-order snapshots: current ({curr_time.isoformat()}) is earlier than baseline ({prev_time.isoformat()}).",
+            }
 
         if curr_time == prev_time:
             return {
@@ -452,7 +530,7 @@ class ResearchSnapshotService:
         else:
             query = query.filter(ResearchSnapshot.user_id == None)
 
-        snapshots = query.order_by(desc(ResearchSnapshot.as_of)).limit(5).all()
+        snapshots = query.order_by(desc(ResearchSnapshot.as_of)).limit(30).all()
 
         if not snapshots:
             return {
@@ -466,16 +544,32 @@ class ResearchSnapshotService:
 
         curr = snapshots[0]
         curr_as_of = ResearchSnapshotService._parse_datetime(curr.as_of)
+        if not curr_as_of:
+            return {
+                "status": "incompatible",
+                "reason": "Current snapshot has an unparseable observation timestamp.",
+            }
 
-        # Find the most recent strictly earlier snapshot
+        # Find the most recent strictly earlier COMPATIBLE baseline
         prev: Optional[ResearchSnapshot] = None
+        incompatible_reasons = []
+
         for s in snapshots[1:]:
             s_time = ResearchSnapshotService._parse_datetime(s.as_of)
-            if s_time < curr_as_of:
-                prev = s
-                break
+            if s_time and s_time < curr_as_of:
+                comp = ResearchSnapshotService.compare_snapshots(curr, s)
+                if comp.get("status") in ("compared", "identical_observation"):
+                    prev = s
+                    break
+                else:
+                    incompatible_reasons.append(comp.get("reason", "Incompatible parameters"))
 
         if not prev:
+            if incompatible_reasons:
+                return {
+                    "status": "incompatible",
+                    "reason": f"No compatible historical baseline found: {incompatible_reasons[0]}",
+                }
             return {
                 "status": "no_prior_snapshot",
                 "symbol": clean_sym,
@@ -603,7 +697,8 @@ class ResearchSnapshotService:
                 })
 
             if item_triggers:
-                # Sort triggers by priority and select the most significant trigger
+                # Calculate composite severity score: priority 1 gives 9 pts, priority 5 gives 5 pts
+                ranking_score = sum((10 - t["priority"]) for t in item_triggers)
                 item_triggers.sort(key=lambda t: t["priority"])
                 primary = item_triggers[0]
                 radar_items.append({
@@ -612,6 +707,7 @@ class ResearchSnapshotService:
                     "sector": sector,
                     "price": round(price, 2),
                     "change_pct": round(change_pct, 2),
+                    "ranking_score": ranking_score,
                     "trigger_type": primary["trigger_type"],
                     "title": primary["title"],
                     "why": primary["why"],
@@ -622,10 +718,15 @@ class ResearchSnapshotService:
                     "source": source,
                 })
 
+        # Deterministic cross-instrument ranking:
+        # 1. Composite trigger score descending
+        # 2. Absolute daily move % descending
+        # 3. Symbol alphabetically ascending (deterministic tie-breaker)
+        radar_items.sort(key=lambda r: (-r["ranking_score"], -abs(r["change_pct"]), r["symbol"]))
         return radar_items
 
     @staticmethod
-    def get_personalized_brief(db: Session, user_id: Optional[int] = None) -> dict:
+    def get_personalized_brief(db: Session, user_id: Optional[Union[int, str]] = None) -> dict:
         """
         Generate a comprehensive, personalized daily research brief.
         Combines:
@@ -639,13 +740,27 @@ class ResearchSnapshotService:
         watchlist_symbols: List[str] = []
 
         if user_id is not None:
+            uid_str = str(user_id)
             items = (
                 db.query(WatchlistItem.symbol)
-                .filter(WatchlistItem.user_id == user_id)
+                .filter(WatchlistItem.user_id == uid_str)
                 .order_by(WatchlistItem.added_at.desc())
                 .all()
             )
             watchlist_symbols = [i[0].upper() for i in items]
+
+            # If empty, also check legacy table "WatchlistItem" in case table is pending migration
+            if not watchlist_symbols:
+                try:
+                    from sqlalchemy import text
+                    legacy_rows = db.execute(
+                        text('SELECT symbol FROM "WatchlistItem" WHERE user_id = :uid ORDER BY added_at DESC'),
+                        {"uid": uid_str}
+                    ).fetchall()
+                    if legacy_rows:
+                        watchlist_symbols = [r[0].upper() for r in legacy_rows]
+                except Exception:
+                    pass
 
         # Fetch portfolio summary
         portfolio_summary: Optional[dict] = None
@@ -676,6 +791,51 @@ class ResearchSnapshotService:
         if is_onboarding:
             eval_symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
 
+        # Fetch quotes and compute technicals for radar evaluation & bounded snapshot refresh
+        quotes_map: Dict[str, dict] = {}
+        technicals_map: Dict[str, dict] = {}
+
+        try:
+            from services.market_data_service import market_data_service
+            from ai_models.prediction_engine import PredictionEngine
+            pred_engine = PredictionEngine()
+
+            uid_arg = str(user_id) if user_id is not None else None
+            quotes_map = market_data_service.get_watchlist_quotes(
+                eval_symbols[:15],
+                user_id=uid_arg,
+                exchange="NSE",
+                db=db,
+            )
+
+            for sym in eval_symbols[:15]:
+                q = quotes_map.get(sym) or {}
+                if q.get("status") != "unavailable" and isinstance(q.get("price"), (int, float)):
+                    candles = market_data_service.get_ohlcv(sym, "1Y", False, "NSE")
+                    tech = pred_engine.compute_technicals_from_ohlcv(candles, q["price"]) if candles else {}
+                    technicals_map[sym] = tech
+
+                    # Record / refresh snapshot for followed companies so comparisons remain fresh
+                    if sym in watchlist_symbols:
+                        ResearchSnapshotService.record_snapshot(
+                            db=db,
+                            symbol=sym,
+                            quote_data=q,
+                            technicals=tech,
+                            exchange="NSE",
+                            user_id=user_id,
+                        )
+        except Exception as err:
+            logger.debug("[PersonalizedBrief] Radar quotes fetch exception: %s", err)
+
+        # Generate ranked radar items across instruments
+        radar_items = ResearchSnapshotService.get_radar_items(
+            eval_symbols[:15],
+            quotes=quotes_map,
+            technicals_map=technicals_map,
+            portfolio_summary=portfolio_summary,
+        )
+
         # Fetch comparisons for followed symbols
         watchlist_changes = []
         for sym in watchlist_symbols[:10]:
@@ -700,6 +860,7 @@ class ResearchSnapshotService:
             "has_portfolio": has_portfolio,
             "is_onboarding": is_onboarding,
             "watchlist_changes": watchlist_changes,
+            "radar_items": radar_items,
             "portfolio_exposure": {
                 "total_invested": portfolio_summary.get("total_invested") if has_portfolio else 0.0,
                 "current_value": portfolio_summary.get("current_value") if has_portfolio else 0.0,

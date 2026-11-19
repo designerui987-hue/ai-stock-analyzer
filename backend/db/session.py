@@ -101,6 +101,43 @@ def apply_migrations(bind_engine=None):
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_created_at ON research_snapshots (created_at);"))
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_snapshot_user_sym_as_of ON research_snapshots (COALESCE(user_id, -1), symbol, exchange, as_of);"))
 
+                # 3. Watchlist items unified table & legacy WatchlistItem migration
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS watchlist_items (
+                        id VARCHAR PRIMARY KEY,
+                        user_id VARCHAR NOT NULL,
+                        symbol VARCHAR NOT NULL,
+                        exchange VARCHAR NOT NULL DEFAULT 'NSE',
+                        notes TEXT,
+                        added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_user_id ON watchlist_items (user_id);"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_symbol ON watchlist_items (symbol);"))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_watchlist_user_symbol ON watchlist_items (user_id, symbol);"))
+                conn.execute(text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.tables WHERE table_name = 'watchlist_items'
+                        ) AND NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns WHERE table_name = 'watchlist_items' AND column_name = 'exchange'
+                        ) THEN
+                            ALTER TABLE watchlist_items ADD COLUMN exchange VARCHAR NOT NULL DEFAULT 'NSE';
+                        END IF;
+
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.tables WHERE table_name = 'WatchlistItem'
+                        ) THEN
+                            INSERT INTO watchlist_items (id, user_id, symbol, exchange, notes, added_at)
+                            SELECT id, user_id, symbol, COALESCE(exchange, 'NSE'), notes, added_at
+                            FROM "WatchlistItem"
+                            ON CONFLICT (user_id, symbol) DO NOTHING;
+                        END IF;
+                    END
+                    $$;
+                """))
+
             elif backend_name == "sqlite":
                 # 1. Users table migration
                 try:
@@ -155,6 +192,34 @@ def apply_migrations(bind_engine=None):
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_as_of ON research_snapshots (as_of);"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_created_at ON research_snapshots (created_at);"))
                     conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_snapshot_user_sym_as_of ON research_snapshots (user_id, symbol, exchange, as_of);"))
+
+                    # 3. Watchlist items unified table & legacy WatchlistItem migration
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS watchlist_items (
+                            id VARCHAR PRIMARY KEY,
+                            user_id VARCHAR NOT NULL,
+                            symbol VARCHAR NOT NULL,
+                            exchange VARCHAR NOT NULL DEFAULT 'NSE',
+                            notes TEXT,
+                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_user_id ON watchlist_items (user_id);"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_symbol ON watchlist_items (symbol);"))
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_watchlist_user_symbol ON watchlist_items (user_id, symbol);"))
+
+                    cursor = conn.execute(text("PRAGMA table_info(watchlist_items)"))
+                    columns = [row[1] for row in cursor.fetchall()]
+                    if "exchange" not in columns:
+                        conn.execute(text("ALTER TABLE watchlist_items ADD COLUMN exchange VARCHAR DEFAULT 'NSE' NOT NULL;"))
+
+                    cursor = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='WatchlistItem'"))
+                    if cursor.fetchone():
+                        conn.execute(text("""
+                            INSERT OR IGNORE INTO watchlist_items (id, user_id, symbol, exchange, notes, added_at)
+                            SELECT id, user_id, symbol, COALESCE(exchange, 'NSE'), notes, added_at
+                            FROM WatchlistItem;
+                        """))
                 except Exception:
                     pass
 

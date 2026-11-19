@@ -329,3 +329,79 @@ def test_research_language_factual_compliance():
     # Check Sector concentration guideline
     sec_triggers = [r for r in radar if any("Sector Concentration" in s for s in r.get("secondary_triggers", [])) or r.get("trigger_type") == "SECTOR_CONCENTRATION"]
     assert len(sec_triggers) > 0
+
+
+def test_review_findings_hardening():
+    """
+    Verify fixes for independent review findings:
+    1. Invalid timestamps and non-finite prices are rejected.
+    2. Stale quotes are rejected from snapshot recording.
+    3. Material indicator shifts (e.g. RSI 29 -> 75) are NOT dropped even if price is identical.
+    4. Mismatched lookbacks return incompatible.
+    5. Baseline search finds a compatible historical baseline across mixed history.
+    6. Canonical WatchlistItem and WatchlistItem migration reflect in personalized brief.
+    """
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool)
+    Base.metadata.create_all(bind=engine)
+    apply_migrations(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    # 1. Invalid timestamp rejected
+    snap_inv_time = ResearchSnapshotService.record_snapshot(
+        session, "INFY", {"price": 100.0, "as_of": "invalid-time"}
+    )
+    assert snap_inv_time is None
+
+    # 2. Infinite price rejected
+    snap_inf = ResearchSnapshotService.record_snapshot(
+        session, "INFY", {"price": float("inf"), "as_of": "2026-11-19T08:00:00Z"}
+    )
+    assert snap_inf is None
+
+    # 3. Stale quote rejected
+    snap_stale = ResearchSnapshotService.record_snapshot(
+        session, "INFY", {"price": 100.0, "as_of": "2026-11-19T08:00:00Z", "freshness": "STALE"}
+    )
+    assert snap_stale is None
+
+    # 4. Same price, changed RSI (29 -> 75) after 60s must record a new snapshot
+    t1 = datetime(2026, 11, 19, 8, 0, tzinfo=timezone.utc)
+    t2 = datetime(2026, 11, 19, 8, 1, tzinfo=timezone.utc)
+
+    snap1 = ResearchSnapshotService.record_snapshot(
+        session, "TCS",
+        quote_data={"price": 3500.0, "as_of": t1.isoformat()},
+        technicals={"rsi": 29.0, "sma_20": 3490.0},
+    )
+    snap2 = ResearchSnapshotService.record_snapshot(
+        session, "TCS",
+        quote_data={"price": 3500.0, "as_of": t2.isoformat()},
+        technicals={"rsi": 75.0, "sma_20": 3490.0},
+    )
+    assert snap1 is not None and snap2 is not None
+    assert snap1.id != snap2.id
+    assert snap2.rsi_14 == 75.0
+
+    # 5. Incompatible lookback (250 vs 20) returns incompatible
+    snap_lb250 = ResearchSnapshot(
+        symbol="RELIANCE", exchange="NSE", as_of=t2, price=1200.0,
+        lookback_bars=250, timeframe="1D", adjustment_basis="split_and_dividend_adjusted"
+    )
+    snap_lb20 = ResearchSnapshot(
+        symbol="RELIANCE", exchange="NSE", as_of=t1, price=1190.0,
+        lookback_bars=20, timeframe="1D", adjustment_basis="split_and_dividend_adjusted"
+    )
+    comp_lb = ResearchSnapshotService.compare_snapshots(snap_lb250, snap_lb20)
+    assert comp_lb["status"] == "incompatible"
+    assert "Lookback window mismatch" in comp_lb["reason"]
+
+    # 6. Canonical watchlist reflected in personalized brief
+    item = WatchlistItem(user_id="user_test_99", symbol="BHARTIARTL", exchange="NSE")
+    session.add(item)
+    session.commit()
+
+    brief = ResearchSnapshotService.get_personalized_brief(session, user_id="user_test_99")
+    assert brief["watchlist_count"] >= 1
+    assert "BHARTIARTL" in [w["symbol"] for w in brief.get("watchlist_changes", [])] or brief["has_watchlist"] is True
+    assert brief["is_onboarding"] is False

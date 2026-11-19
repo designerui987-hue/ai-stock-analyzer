@@ -113,4 +113,5 @@ model WatchlistItem {
 
   @@unique([user_id, symbol])
   @@index([user_id])
+  @@map("watchlist_items")
 }

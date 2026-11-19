@@ -175,17 +175,13 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (isDbConnectionError(err)) {
-      return NextResponse.json({
-        success: true,
-        live_trading_enabled: process.env.ENABLE_LIVE_TRADING === 'true',
-        orders: [],
-        paper_orders: [],
-        live_orders: [],
-        source: 'local_storage_fallback',
-      });
-    }
     console.error('Fetch order blotter error:', err);
+    if (isDbConnectionError(err)) {
+      return NextResponse.json(
+        { success: false, error: 'Order blotter database is temporarily unavailable.', unavailable: true },
+        { status: 503 }
+      );
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

@@ -17,6 +17,7 @@ import {
   X,
   RefreshCw,
   AlertTriangle,
+  Compass,
 } from 'lucide-react';
 import { StockLogo } from '@/components/ui/StockLogo';
 import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
@@ -64,23 +65,37 @@ export default function TodayPage() {
   const [focusChart, setFocusChart] = useState<Array<{ time: string; value: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [showDesignDialog, setShowDesignDialog] = useState(false);
   const [transportStatus, setTransportStatus] = useState<'CONNECTING' | 'CONNECTED' | 'STANDBY'>('CONNECTING');
   const [personalizedBrief, setPersonalizedBrief] = useState<any>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   // Authoritative session evaluation
   const sessionInfo = evaluateNseSession();
 
-  // Load persisted research mode preference
+  // Load persisted research mode & auto-refresh preferences
   useEffect(() => {
     try {
       const savedMode = localStorage.getItem('stockai_research_mode');
       if (savedMode === 'analyst' || savedMode === 'brief') {
         setMode(savedMode);
       }
+      const savedAutoRef = localStorage.getItem('stockai_auto_refresh_quotes');
+      if (savedAutoRef !== null) {
+        setAutoRefresh(savedAutoRef === 'true');
+      }
     } catch {
       // Ignore
     }
+
+    const handlePref = (e: any) => {
+      if (typeof e.detail?.autoRefresh === 'boolean') {
+        setAutoRefresh(e.detail.autoRefresh);
+      }
+    };
+    window.addEventListener('quotes-preference-changed', handlePref);
+    return () => window.removeEventListener('quotes-preference-changed', handlePref);
   }, []);
 
   const handleModeChange = (newMode: 'brief' | 'analyst') => {
@@ -119,12 +134,20 @@ export default function TodayPage() {
       }
 
       let syms: string[] = [];
-      if (userWatchlistRes?.success && Array.isArray(userWatchlistRes.items)) {
+      if (userWatchlistRes?.unavailable || userWatchlistRes?.error) {
+        setWatchlistError(userWatchlistRes.error || 'Watchlist service is temporarily unavailable.');
+      } else if (userWatchlistRes?.success && Array.isArray(userWatchlistRes.items)) {
+        setWatchlistError(null);
         syms = userWatchlistRes.items.map((i: any) => i.symbol.toUpperCase());
+        setWatchlistSymbols(syms);
       } else if (Array.isArray(userWatchlistRes)) {
+        setWatchlistError(null);
         syms = userWatchlistRes.map((i: any) => (typeof i === 'string' ? i : i.symbol).toUpperCase());
+        setWatchlistSymbols(syms);
+      } else {
+        setWatchlistError(null);
+        setWatchlistSymbols([]);
       }
-      setWatchlistSymbols(syms);
 
       // Fetch quotes for followed stocks
       const quoteMap: Record<string, any> = {};
@@ -174,10 +197,10 @@ export default function TodayPage() {
     return () => window.removeEventListener('watchlist-updated', handleWatchlistChange);
   }, [loadData]);
 
-  // Real-time quote stream subscription
+  // Real-time quote stream subscription (respects user auto-refresh preference)
   useEffect(() => {
     let unsub: (() => void) | undefined;
-    if (auth.isAuthenticated() && watchlistSymbols && watchlistSymbols.length > 0) {
+    if (autoRefresh && auth.isAuthenticated() && watchlistSymbols && watchlistSymbols.length > 0) {
       unsub = api.subscribePriceStream(
         watchlistSymbols,
         (payload: Record<string, any>) => {
@@ -189,11 +212,13 @@ export default function TodayPage() {
           setTransportStatus('STANDBY');
         }
       );
+    } else {
+      setTransportStatus('STANDBY');
     }
     return () => {
       if (unsub) unsub();
     };
-  }, [watchlistSymbols]);
+  }, [watchlistSymbols, autoRefresh]);
 
   // Dynamic market takeaway
   const { advances, declines, unchanged, sampleSize, breadthSource, headline, summary } = useMemo(() => {
@@ -257,15 +282,19 @@ export default function TodayPage() {
     };
   }, [overview, watchlistQuotes]);
 
-  // Focus stock for "On Your Radar"
-  const focusSymbol = watchlistSymbols && watchlistSymbols.length > 0 ? watchlistSymbols[0] : 'RELIANCE';
+  // Focus stock for "On Your Radar" derived from ranked radar items if present
+  const topRadar = personalizedBrief?.radar_items?.[0];
+  const focusSymbol = topRadar?.symbol || (watchlistSymbols && watchlistSymbols.length > 0 ? watchlistSymbols[0] : 'RELIANCE');
   const focusQuote = watchlistQuotes[focusSymbol];
-  const focusPrice = typeof focusQuote?.price === 'number' ? focusQuote.price : null;
-  const focusChange = typeof (focusQuote?.change_percent ?? focusQuote?.change_pct) === 'number'
+  const focusPrice = topRadar?.price ?? (typeof focusQuote?.price === 'number' ? focusQuote.price : null);
+  const focusChange = topRadar?.change_pct ?? (typeof (focusQuote?.change_percent ?? focusQuote?.change_pct) === 'number'
     ? (focusQuote.change_percent ?? focusQuote.change_pct)
-    : null;
+    : null);
   const isFocusUp = (focusChange ?? 0) >= 0;
-  const focusMeta = NIFTY50_META[focusSymbol] || { name: `${focusSymbol} Ltd`, sector: 'Equity' };
+  const focusMeta = NIFTY50_META[focusSymbol] || { name: topRadar?.name || `${focusSymbol} Ltd`, sector: topRadar?.sector || 'Equity' };
+  const focusWhy = topRadar?.why || 'Moving averages and volume tracking provide primary support levels.';
+  const focusEvidence = topRadar?.evidence || null;
+  const focusRisk = topRadar?.risk || null;
 
   // Data-driven "Worth Your Attention"
   const attentionItems = useMemo(() => {
@@ -277,6 +306,21 @@ export default function TodayPage() {
       href: string;
       icon: any;
     }> = [];
+
+    // Prepend secondary ranked radar items if available from personalized brief
+    if (Array.isArray(personalizedBrief?.radar_items)) {
+      personalizedBrief.radar_items.slice(1, 3).forEach((r: any) => {
+        items.push({
+          id: `radar-${r.symbol}`,
+          title: `${r.symbol}: ${r.title}`,
+          desc: `${r.why} ${r.evidence || ''}`,
+          linkText: `Investigate ${r.symbol}`,
+          href: `/stocks/${encodeURIComponent(r.symbol)}`,
+          icon: Compass,
+        });
+      });
+    }
+
     const entries = Object.entries(watchlistQuotes);
 
     // 1. Sector movement correlation
@@ -738,13 +782,21 @@ export default function TodayPage() {
               <span className="text-[10px] font-semibold text-[#087F73] uppercase tracking-wider block">
                 Selection Criteria & Evidence
               </span>
-              <p className="text-[#142B32] text-[11px] leading-relaxed">
-                {focusChange !== null && Math.abs(focusChange) >= 2.0
-                  ? `Selected on daily price volatility criteria (${formatPercent(focusChange)} today). Testing short-term resistance.`
-                  : `Top active instrument from your followed watchlist. Tracking 30-day price trajectory and volume participation.`}
+              <p className="text-[#142B32] text-xs leading-relaxed font-medium">
+                {focusWhy}
               </p>
-              <div className="text-[10px] text-[#899DA3] pt-0.5">
-                Transparent rule: Priority based on watchlist membership, volume surge, and indicator shifts. No invented urgency.
+              {focusEvidence && (
+                <div className="text-[11px] text-[#5C6E74] pt-0.5">
+                  Evidence: {focusEvidence}
+                </div>
+              )}
+              {focusRisk && (
+                <div className="text-[11px] text-[#BB4B48] pt-0.5">
+                  Risk note: {focusRisk}
+                </div>
+              )}
+              <div className="text-[11px] text-[#899DA3] pt-0.5">
+                Transparent rule: Ranked across instruments by volume surge, momentum extremes, and moving-average tests. No invented urgency.
               </div>
             </div>
           </div>
@@ -786,7 +838,19 @@ export default function TodayPage() {
               </Link>
             </div>
 
-            {watchlistSymbols === null ? (
+            {watchlistError ? (
+              <div className="p-8 text-center space-y-3">
+                <p className="text-xs text-[#BB4B48] font-medium">
+                  {watchlistError}
+                </p>
+                <button
+                  onClick={() => loadData()}
+                  className="px-3.5 py-1.5 bg-[#FAF3F0] hover:bg-[#F5E6E1] text-[#BB4B48] border border-[#BB4B48]/30 rounded-[7px] text-xs font-semibold"
+                >
+                  Retry loading watchlist
+                </button>
+              </div>
+            ) : watchlistSymbols === null ? (
               <div className="p-8 text-center text-xs text-[#687A81]">
                 Loading watchlist records…
               </div>

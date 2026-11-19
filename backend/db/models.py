@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boo
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
 import enum
+import uuid
 
 Base = declarative_base()
 
@@ -31,7 +32,6 @@ class User(Base):
 
     portfolios = relationship("Portfolio", back_populates="user", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="user", cascade="all, delete-orphan")
-    watchlist = relationship("WatchlistItem", back_populates="user", cascade="all, delete-orphan")
 
 
 class Portfolio(Base):
@@ -83,16 +83,15 @@ class Alert(Base):
 class WatchlistItem(Base):
     __tablename__ = "watchlist_items"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, index=True, nullable=False)
     symbol = Column(String, index=True, nullable=False)
+    exchange = Column(String, default="NSE", nullable=False)
     notes = Column(String, nullable=True)
     added_at = Column(DateTime, default=utcnow)
 
-    user = relationship("User", back_populates="watchlist")
-
     __table_args__ = (
-        UniqueConstraint('user_id', 'symbol', name='uq_user_symbol'),
+        UniqueConstraint('user_id', 'symbol', name='uq_watchlist_user_symbol'),
     )
 
 

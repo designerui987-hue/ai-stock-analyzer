@@ -1,12 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
-import {
-  isDbConnectionError,
-  getFallbackWatchlist,
-  addFallbackWatchlist,
-  removeFallbackWatchlist,
-} from '@/lib/db-fallback';
+import { isDbConnectionError } from '@/lib/db-fallback';
 import { z } from 'zod';
 
 const AddWatchlistSchema = z.object({
@@ -54,16 +49,18 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (isDbConnectionError(err)) {
-      const fallbackItems = getFallbackWatchlist(userId);
-      return NextResponse.json({
-        success: true,
-        items: fallbackItems,
-        source: 'local_storage_fallback',
-        as_of: new Date().toISOString(),
-      });
-    }
     console.error('[Watchlist GET Error]', err);
+    if (isDbConnectionError(err)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Watchlist database connection is temporarily unavailable.',
+          unavailable: true,
+          as_of: new Date().toISOString(),
+        },
+        { status: 503 }
+      );
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
@@ -119,16 +116,17 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (isDbConnectionError(err) && parsedItem) {
-      const { symbol, exchange, notes } = parsedItem;
-      const item = addFallbackWatchlist(userId, symbol, exchange, notes);
-      return NextResponse.json({
-        success: true,
-        item,
-        source: 'local_storage_fallback',
-      });
-    }
     console.error('[Watchlist POST Error]', err);
+    if (isDbConnectionError(err)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Watchlist database connection is temporarily unavailable. Symbol could not be persisted.',
+          unavailable: true,
+        },
+        { status: 503 }
+      );
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
@@ -169,11 +167,17 @@ export async function DELETE(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (isDbConnectionError(err) && targetSymbol) {
-      removeFallbackWatchlist(userId, targetSymbol);
-      return NextResponse.json({ success: true, message: `Removed ${targetSymbol} from watchlist (local fallback)` });
-    }
     console.error('[Watchlist DELETE Error]', err);
+    if (isDbConnectionError(err)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Watchlist database connection is temporarily unavailable. Removal could not be persisted.',
+          unavailable: true,
+        },
+        { status: 503 }
+      );
+    }
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
