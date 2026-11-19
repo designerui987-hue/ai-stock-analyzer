@@ -94,3 +94,38 @@ class WatchlistItem(Base):
     __table_args__ = (
         UniqueConstraint('user_id', 'symbol', name='uq_user_symbol'),
     )
+
+
+class ResearchSnapshot(Base):
+    __tablename__ = "research_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    symbol = Column(String, index=True, nullable=False)
+    exchange = Column(String, default="NSE", nullable=False)
+    as_of = Column(DateTime, nullable=False, index=True)
+    price = Column(Float, nullable=False)
+    open_price = Column(Float, nullable=True)
+    high_price = Column(Float, nullable=True)
+    low_price = Column(Float, nullable=True)
+    volume = Column(Integer, nullable=True)
+    avg_volume_20d = Column(Integer, nullable=True)
+    rsi_14 = Column(Float, nullable=True)
+    sma_20 = Column(Float, nullable=True)
+    sma_50 = Column(Float, nullable=True)
+    sma_200 = Column(Float, nullable=True)
+    macd = Column(Float, nullable=True)
+    macd_signal = Column(Float, nullable=True)
+    vol_surge = Column(Float, nullable=True)
+    signal = Column(String, nullable=True)
+    rule_version = Column(String, default="v1.0-deterministic-quant", nullable=False)
+    timeframe = Column(String, default="1D", nullable=False)
+    lookback_bars = Column(Integer, default=250, nullable=True)
+    adjustment_basis = Column(String, default="split_and_dividend_adjusted", nullable=False)
+    source = Column(String, default="yfinance/NSE", nullable=False)
+    created_at = Column(DateTime, default=utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'symbol', 'exchange', 'as_of', name='uq_snapshot_user_sym_as_of'),
+    )
+

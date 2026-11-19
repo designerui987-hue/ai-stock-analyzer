@@ -17,6 +17,7 @@ import {
   ServerQuotePayload,
 } from '@/lib/orders/execution';
 import { getPaperAccountState, withAccountLock, computePaperAccountState } from '@/lib/orders/paper-account';
+import { isDbConnectionError } from '@/lib/db-fallback';
 import { z } from 'zod';
 
 function matchesExistingOrder(existing: any, expected: {
@@ -173,6 +174,16 @@ export async function GET(req: Request) {
   } catch (err: any) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
+    }
+    if (isDbConnectionError(err)) {
+      return NextResponse.json({
+        success: true,
+        live_trading_enabled: process.env.ENABLE_LIVE_TRADING === 'true',
+        orders: [],
+        paper_orders: [],
+        live_orders: [],
+        source: 'local_storage_fallback',
+      });
     }
     console.error('Fetch order blotter error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

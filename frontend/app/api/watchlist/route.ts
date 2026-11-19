@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
+import {
+  isDbConnectionError,
+  getFallbackWatchlist,
+  addFallbackWatchlist,
+  removeFallbackWatchlist,
+} from '@/lib/db-fallback';
 import { z } from 'zod';
 
 const AddWatchlistSchema = z.object({
@@ -25,8 +31,9 @@ const AddWatchlistSchema = z.object({
 });
 
 export async function GET(req: Request) {
+  let userId = 'demo_user';
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
 
     const items = await prisma.watchlistItem.findMany({
       where: { user_id: userId },
@@ -47,14 +54,14 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (err?.code === 'P1001' || err?.message?.includes("Can't reach database server")) {
+    if (isDbConnectionError(err)) {
+      const fallbackItems = getFallbackWatchlist(userId);
       return NextResponse.json({
-        success: false,
-        status: 'unavailable',
-        error: 'Database server is unreachable. Please verify DATABASE_URL and ensure PostgreSQL is running.',
-        items: [],
+        success: true,
+        items: fallbackItems,
+        source: 'local_storage_fallback',
         as_of: new Date().toISOString(),
-      }, { status: 503 });
+      });
     }
     console.error('[Watchlist GET Error]', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
@@ -62,8 +69,10 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  let userId = 'demo_user';
+  let parsedItem: { symbol: string; exchange: string; notes?: string } | null = null;
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
     const body = await req.json();
     const parsed = AddWatchlistSchema.safeParse(body);
 
@@ -74,6 +83,7 @@ export async function POST(req: Request) {
       );
     }
 
+    parsedItem = parsed.data;
     const { symbol, exchange, notes } = parsed.data;
 
     const item = await prisma.watchlistItem.upsert({
@@ -109,12 +119,14 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (err?.code === 'P1001' || err?.message?.includes("Can't reach database server")) {
+    if (isDbConnectionError(err) && parsedItem) {
+      const { symbol, exchange, notes } = parsedItem;
+      const item = addFallbackWatchlist(userId, symbol, exchange, notes);
       return NextResponse.json({
-        success: false,
-        status: 'unavailable',
-        error: 'Database server is unreachable. Please verify DATABASE_URL and ensure PostgreSQL is running.',
-      }, { status: 503 });
+        success: true,
+        item,
+        source: 'local_storage_fallback',
+      });
     }
     console.error('[Watchlist POST Error]', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
@@ -122,8 +134,10 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  let userId = 'demo_user';
+  let targetSymbol = '';
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
     const { searchParams } = new URL(req.url);
     let symbol = searchParams.get('symbol');
 
@@ -141,6 +155,7 @@ export async function DELETE(req: Request) {
     }
 
     symbol = symbol.toUpperCase().trim();
+    targetSymbol = symbol;
 
     await prisma.watchlistItem.deleteMany({
       where: {
@@ -154,12 +169,9 @@ export async function DELETE(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
-    if (err?.code === 'P1001' || err?.message?.includes("Can't reach database server")) {
-      return NextResponse.json({
-        success: false,
-        status: 'unavailable',
-        error: 'Database server is unreachable. Please verify DATABASE_URL and ensure PostgreSQL is running.',
-      }, { status: 503 });
+    if (isDbConnectionError(err) && targetSymbol) {
+      removeFallbackWatchlist(userId, targetSymbol);
+      return NextResponse.json({ success: true, message: `Removed ${targetSymbol} from watchlist (local fallback)` });
     }
     console.error('[Watchlist DELETE Error]', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

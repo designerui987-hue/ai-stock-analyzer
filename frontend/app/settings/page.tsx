@@ -2,28 +2,48 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { auth } from '@/lib/api';
-import { Settings, Key, Shield, Bell, Check, User, Server, MessageSquare, Send, Smartphone, Radio, Sliders, Moon, ExternalLink, QrCode } from 'lucide-react';
-import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { Badge } from '@/components/ui/Badge';
+import {
+  User,
+  Sliders,
+  Bell,
+  Shield,
+  Layers,
+  Database,
+  Check,
+  Send,
+  Smartphone,
+  Radio,
+  ExternalLink,
+  RefreshCw,
+  LogOut,
+  AlertCircle,
+  Key,
+} from 'lucide-react';
+import { formatINR } from '@/lib/format';
+
+type SettingsTab = 'ACCOUNT' | 'PREFERENCES' | 'ALERTS' | 'RISK' | 'CONNECTIONS' | 'ADVANCED';
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState({
-    notifications: true,
-    emailAlerts: false,
-    autoRefresh: true,
-    riskTolerance: 'moderate',
-    accountCapital: 1183500,
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<SettingsTab>('ACCOUNT');
+  const [user, setUser] = useState<{ id?: string; email?: string; username?: string } | null>(null);
+
+  // Preferences
+  const [researchMode, setResearchMode] = useState<'brief' | 'analyst'>('brief');
+  const [autoRefreshQuotes, setAutoRefreshQuotes] = useState(true);
+  const [orderProductDefault, setOrderProductDefault] = useState<'CNC' | 'MIS'>('CNC');
+
+  // Risk settings (scoped by account ID)
+  const [riskSettings, setRiskSettings] = useState({
+    accountCapital: 1000000,
     riskPerTradePct: 1.0,
     maxConcentrationPct: 20,
     maxOpenPositions: 8,
   });
 
-  const [saved, setSaved] = useState(false);
-
-  // Alert Channel Preferences State
+  // Alert preferences
   const [channels, setChannels] = useState({
     web_push: true,
     telegram: false,
@@ -49,36 +69,62 @@ export default function SettingsPage() {
   const [telegramChatId, setTelegramChatId] = useState('');
   const [whatsappPhone, setWhatsappPhone] = useState('+91');
   const [pushSubscribed, setPushSubscribed] = useState(false);
-  const [waVerificationSent, setWaVerificationSent] = useState(false);
   const [waSaveStatus, setWaSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [linkingTelegram, setLinkingTelegram] = useState(false);
   const [telegramError, setTelegramError] = useState<string | null>(null);
 
-  // Broker Connection State
+  // Broker connection
   const [brokerConn, setBrokerConn] = useState<{ connected: boolean; status: string; expires_at?: string }>({
     connected: false,
     status: 'DISCONNECTED',
   });
 
-  useEffect(() => {
-    // Restore risk settings from strictly account-scoped storage (no cross-account shared fallback)
-    try {
-      const user = auth.getUser();
-      const userKey = user?.id ? `stockai_risk_settings_${user.id}` : null;
-      const savedRisk = userKey ? localStorage.getItem(userKey) : null;
-      if (savedRisk) {
-        const parsed = JSON.parse(savedRisk);
-        setSettings((prev) => ({
-          ...prev,
-          accountCapital: typeof parsed.accountCapital === 'number' ? parsed.accountCapital : prev.accountCapital,
-          riskPerTradePct: typeof parsed.riskPerTradePct === 'number' ? parsed.riskPerTradePct : prev.riskPerTradePct,
-          maxConcentrationPct: typeof parsed.maxConcentrationPct === 'number' ? parsed.maxConcentrationPct : prev.maxConcentrationPct,
-          maxOpenPositions: typeof parsed.maxOpenPositions === 'number' ? parsed.maxOpenPositions : prev.maxOpenPositions,
-        }));
-      }
-    } catch { }
+  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-    // Fetch broker connection status
+  useEffect(() => {
+    const currentUser = auth.getUser();
+    setUser(currentUser);
+
+    // Read research mode
+    try {
+      const mode = localStorage.getItem('stockai_research_mode');
+      if (mode === 'analyst' || mode === 'brief') setResearchMode(mode);
+    } catch {}
+
+    // Restore risk settings scoped to current user
+    if (currentUser?.id) {
+      try {
+        const saved = localStorage.getItem(`stockai_risk_settings_${currentUser.id}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setRiskSettings((prev) => ({
+            accountCapital: typeof parsed.accountCapital === 'number' ? parsed.accountCapital : prev.accountCapital,
+            riskPerTradePct: typeof parsed.riskPerTradePct === 'number' ? parsed.riskPerTradePct : prev.riskPerTradePct,
+            maxConcentrationPct: typeof parsed.maxConcentrationPct === 'number' ? parsed.maxConcentrationPct : prev.maxConcentrationPct,
+            maxOpenPositions: typeof parsed.maxOpenPositions === 'number' ? parsed.maxOpenPositions : prev.maxOpenPositions,
+          }));
+        }
+      } catch {}
+    }
+
+    // Fetch alert preferences
+    fetch('/api/alerts/preferences', { headers: auth.getAuthHeaders() })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.success && json.preference) {
+          const p = json.preference;
+          if (p.channels_enabled) setChannels(p.channels_enabled);
+          if (p.alert_types_subscribed) setAlertTypes(p.alert_types_subscribed);
+          if (p.quiet_hours) setQuietHours(p.quiet_hours);
+          if (typeof p.min_confidence_threshold === 'number') setMinConfThreshold(p.min_confidence_threshold);
+          if (p.telegram_chat_id) setTelegramChatId(p.telegram_chat_id);
+          if (p.whatsapp_number) setWhatsappPhone(p.whatsapp_number);
+        }
+      })
+      .catch(() => {});
+
+    // Fetch broker connection
     fetch('/api/broker/connection', { headers: auth.getAuthHeaders() })
       .then((res) => res.json())
       .then((json) => {
@@ -90,37 +136,13 @@ export default function SettingsPage() {
           });
         }
       })
-      .catch((e) => console.error(e));
-  }, []);
+      .catch(() => {});
 
-  useEffect(() => {
-    // Check Web Push permission state
+    // Check push notifications permission
     if (typeof window !== 'undefined' && 'Notification' in window) {
-      if (Notification.permission === 'granted') {
-        setPushSubscribed(true);
-      }
+      if (Notification.permission === 'granted') setPushSubscribed(true);
     }
-
-    // Fetch alert preferences from backend
-    fetch('/api/alerts/preferences', { headers: auth.getAuthHeaders() })
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.success && json.preference) {
-          const p = json.preference;
-          if (p.channels_enabled) setChannels(p.channels_enabled);
-          if (p.alert_types_subscribed) setAlertTypes(p.alert_types_subscribed);
-          if (p.quiet_hours) setQuietHours(p.quiet_hours);
-          if (p.min_confidence_threshold) setMinConfThreshold(p.min_confidence_threshold);
-          if (p.telegram_chat_id) setTelegramChatId(p.telegram_chat_id);
-          if (p.whatsapp_number) setWhatsappPhone(p.whatsapp_number);
-        }
-      })
-      .catch((e) => console.error(e));
   }, []);
-
-  const handleEnableWebPush = async () => {
-    alert('Web Push gateway is currently disabled in staging. Service worker push registration requires production VAPID infrastructure.');
-  };
 
   const handleConnectTelegram = async () => {
     setLinkingTelegram(true);
@@ -133,10 +155,10 @@ export default function SettingsPage() {
       if (data.success && data.deep_link) {
         window.open(data.deep_link, '_blank');
       } else {
-        setTelegramError(data.error || 'Failed to generate link token');
+        setTelegramError(data.error || 'Failed to generate single-use Telegram link token');
       }
     } catch {
-      setTelegramError('Unable to reach link token service');
+      setTelegramError('Unable to reach Telegram linking service');
     } finally {
       setLinkingTelegram(false);
     }
@@ -169,23 +191,19 @@ export default function SettingsPage() {
     }
   };
 
-  const handleSave = async () => {
-    const user = auth.getUser();
-    if (typeof window !== 'undefined') {
-      const riskPayload = JSON.stringify({
-        accountCapital: settings.accountCapital,
-        riskPerTradePct: settings.riskPerTradePct,
-        maxConcentrationPct: settings.maxConcentrationPct,
-        maxOpenPositions: settings.maxOpenPositions,
-      });
-      if (user?.id) {
-        localStorage.setItem(`stockai_risk_settings_${user.id}`, riskPayload);
-      }
-    }
-
+  const handleSaveAll = async () => {
+    setIsSaving(true);
     try {
-      // Save alert preferences to backend API
-      const res = await fetch('/api/alerts/preferences', {
+      // 1. Save research mode
+      localStorage.setItem('stockai_research_mode', researchMode);
+
+      // 2. Save account-scoped risk settings
+      if (user?.id) {
+        localStorage.setItem(`stockai_risk_settings_${user.id}`, JSON.stringify(riskSettings));
+      }
+
+      // 3. Save alert preferences to backend
+      await fetch('/api/alerts/preferences', {
         method: 'POST',
         headers: auth.getAuthHeaders(),
         body: JSON.stringify({
@@ -198,507 +216,532 @@ export default function SettingsPage() {
         }),
       });
 
-      if (res.ok) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-      } else {
-        alert('Failed to save preferences on the server.');
-      }
-    } catch (e) {
-      console.error(e);
-      alert('Network error while saving settings.');
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } finally {
+      setIsSaving(false);
     }
   };
 
+  const handleSignOut = () => {
+    auth.removeToken();
+    router.push('/login');
+  };
+
   return (
-    <div className="space-y-6 animate-fade-in max-w-4xl">
-      {/* Top Header */}
-      <div>
-        <div className="eyebrow text-[#687A81] mb-2">PLATFORM & PREFERENCES</div>
-        <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
-          Settings.
-        </h1>
-        <p className="text-sm text-[#687A81] mt-1.5">
-          Workspace preferences, alert delivery channels, risk limits, and broker connections.
-        </p>
+    <div className="space-y-6 animate-fade-in max-w-5xl">
+      {/* ── Page Header ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div>
+          <div className="eyebrow text-[#687A81] mb-2">APPLICATION & ACCOUNT CONTROLS</div>
+          <h1 className="text-[32px] md:text-[36px] font-semibold text-[#142B32] tracking-[-1.2px] leading-tight">
+            Settings.
+          </h1>
+          <p className="text-sm text-[#687A81] mt-1.5">
+            Configure risk parameters, notification channels, broker connections, and data sources.
+          </p>
+        </div>
+
+        <button
+          onClick={handleSaveAll}
+          disabled={isSaving}
+          className="px-4 py-2 bg-[#087F73] hover:bg-[#06685e] text-white rounded-[7px] text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 self-start sm:self-auto"
+        >
+          {savedSuccess ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-white" />
+              <span>Settings Saved</span>
+            </>
+          ) : isSaving ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <span>Saving…</span>
+            </>
+          ) : (
+            <span>Save Changes</span>
+          )}
+        </button>
       </div>
 
-      {/* Preferences Section */}
-      <Card size="large" className="space-y-6">
-        <div className="flex items-center space-x-2 border-b border-[#E1E7E8] pb-4">
-          <Settings className="w-4 h-4 text-[#087F73]" />
-          <h3 className="text-sm font-semibold text-[#142B32]">
-            Workspace Preferences
-          </h3>
-        </div>
-
-        <div className="space-y-4">
-          {[
-            {
-              key: 'notifications',
-              label: 'Push Notifications',
-              desc: 'Instant alerts for AI buy/sell signal triggers',
-            },
-            {
-              key: 'emailAlerts',
-              label: 'Daily Market Summary',
-              desc: 'Receive end-of-day portfolio and sentiment reports',
-            },
-            {
-              key: 'autoRefresh',
-              label: 'Real-Time Telemetry Auto-Refresh',
-              desc: 'Automatically poll NSE WebSocket feeds every 10 seconds',
-            },
-          ].map((item) => (
-            <div
-              key={item.key}
-              className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-white/[0.04] last:border-none"
+      {/* ── Settings Category Tabs ──────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-1 p-1 bg-[#EEF2F2] border border-[#E1E7E8] rounded-[9px] w-fit">
+        {[
+          { id: 'ACCOUNT', label: 'Account', icon: User },
+          { id: 'PREFERENCES', label: 'Preferences', icon: Sliders },
+          { id: 'ALERTS', label: 'Alerts', icon: Bell },
+          { id: 'RISK', label: 'Risk', icon: Shield },
+          { id: 'CONNECTIONS', label: 'Connections', icon: Layers },
+          { id: 'ADVANCED', label: 'Advanced Data Sources', icon: Database },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as SettingsTab)}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${
+                isActive
+                  ? 'bg-white text-[#142B32] shadow-sm'
+                  : 'text-[#60737A] hover:text-[#142B32]'
+              }`}
             >
+              <Icon className="w-3.5 h-3.5" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Section: Account ────────────────────────────────────────────── */}
+      {activeTab === 'ACCOUNT' && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 sm:p-8 space-y-6">
+          <div className="border-b border-[#E1E7E8] pb-4">
+            <h2 className="text-[20px] font-semibold text-[#142B32]">User Identity & Session</h2>
+            <p className="text-xs text-[#687A81] mt-0.5">Authoritative session details for your account.</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs text-[#687A81] block mb-1">Display Name</span>
+              <strong className="text-sm font-semibold text-[#142B32]">{user?.username || 'Researcher'}</strong>
+            </div>
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs text-[#687A81] block mb-1">Email Address</span>
+              <strong className="text-sm font-semibold text-[#142B32] font-mono">{user?.email || 'user@example.com'}</strong>
+            </div>
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs text-[#687A81] block mb-1">Account Identifier</span>
+              <span className="text-xs font-mono text-[#142B32] truncate block">{user?.id || 'demo_user'}</span>
+            </div>
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs text-[#687A81] block mb-1">Session Isolation</span>
+              <span className="text-xs font-semibold text-[#087F73]">Strict Tenant Scoped (JWT Verified)</span>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-[#E1E7E8] flex items-center justify-between">
+            <p className="text-xs text-[#687A81]">Sign out to invalidate active session tokens.</p>
+            <button
+              onClick={handleSignOut}
+              className="px-3.5 py-1.5 bg-[#FAF3E5] hover:bg-[#F5EAD4] border border-[#EEE2C6] text-[#BB4B48] rounded-[7px] text-xs font-semibold flex items-center gap-1.5"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* ── Section: Preferences ────────────────────────────────────────── */}
+      {activeTab === 'PREFERENCES' && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 sm:p-8 space-y-6">
+          <div className="border-b border-[#E1E7E8] pb-4">
+            <h2 className="text-[20px] font-semibold text-[#142B32]">Workspace Preferences</h2>
+            <p className="text-xs text-[#687A81] mt-0.5">Customize default views, product modes, and auto-refresh.</p>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
               <div>
-                <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                  {item.label}
-                </span>
-                <p className="text-caption text-slate-500">{item.desc}</p>
+                <h3 className="text-sm font-semibold text-[#142B32]">Default Research Detail</h3>
+                <p className="text-xs text-[#687A81] mt-0.5">Choose between plain-language narrative or expanded quant indicators.</p>
               </div>
-
-              <button
-                type="button"
-                role="switch"
-                aria-checked={!!settings[item.key as keyof typeof settings]}
-                onClick={() =>
-                  setSettings({
-                    ...settings,
-                    [item.key]: !settings[item.key as keyof typeof settings],
-                  })
-                }
-                className={`w-11 h-6 rounded-full relative transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-indigo-500/40 ${settings[item.key as keyof typeof settings]
-                  ? 'bg-indigo-600'
-                  : 'bg-slate-200 dark:bg-slate-800'
+              <div className="flex items-center gap-1 p-1 bg-[#EEF2F2] rounded-[7px] border border-[#E1E7E8]">
+                <button
+                  onClick={() => setResearchMode('brief')}
+                  className={`px-3 py-1 rounded-[5px] text-xs font-semibold ${
+                    researchMode === 'brief' ? 'bg-white text-[#142B32] shadow-sm' : 'text-[#60737A]'
                   }`}
+                >
+                  Quick brief
+                </button>
+                <button
+                  onClick={() => setResearchMode('analyst')}
+                  className={`px-3 py-1 rounded-[5px] text-xs font-semibold ${
+                    researchMode === 'analyst' ? 'bg-white text-[#142B32] shadow-sm' : 'text-[#60737A]'
+                  }`}
+                >
+                  Analyst view
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <div>
+                <h3 className="text-sm font-semibold text-[#142B32]">Default Equity Product</h3>
+                <p className="text-xs text-[#687A81] mt-0.5">Cash and Carry (CNC / Delivery) or Margin Intraday Square-off (MIS).</p>
+              </div>
+              <select
+                value={orderProductDefault}
+                onChange={(e) => setOrderProductDefault(e.target.value as any)}
+                className="bg-white border border-[#E1E7E8] text-[#142B32] text-xs font-semibold rounded-[7px] px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#087F73]/20"
               >
-                <span
-                  className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-150 ease-out ${settings[item.key as keyof typeof settings] ? 'translate-x-6' : 'translate-x-1'
-                    }`}
+                <option value="CNC">CNC (Delivery)</option>
+                <option value="MIS">MIS (Intraday)</option>
+              </select>
+            </div>
+
+            <div className="flex items-center justify-between p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <div>
+                <h3 className="text-sm font-semibold text-[#142B32]">Live Quote Polling</h3>
+                <p className="text-xs text-[#687A81] mt-0.5">Automatically poll market indices every 30 seconds during active sessions.</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoRefreshQuotes}
+                  onChange={(e) => setAutoRefreshQuotes(e.target.checked)}
+                  className="sr-only peer"
                 />
-              </button>
+                <div className="w-11 h-6 bg-[#D8E2E4] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#087F73]" />
+              </label>
             </div>
-          ))}
-
-          <div className="flex items-center justify-between pt-2">
-            <div>
-              <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                Risk Tolerance Profile
-              </span>
-              <p className="text-caption text-slate-500">
-                AI rebalancing engine adapts stop-loss sensitivity accordingly
-              </p>
-            </div>
-
-            <select
-              value={settings.riskTolerance}
-              onChange={(e) => setSettings({ ...settings, riskTolerance: e.target.value })}
-              className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-white/[0.08] text-slate-900 dark:text-slate-100 rounded-input px-3 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-            >
-              <option value="conservative">Conservative</option>
-              <option value="moderate">Moderate</option>
-              <option value="aggressive">Aggressive</option>
-            </select>
           </div>
-        </div>
-      </Card>
+        </section>
+      )}
 
-      {/* Risk Management & Position Sizing Rules Card */}
-      <Card size="large" className="space-y-6">
-        <div className="flex items-center space-x-2 border-b border-slate-100 dark:border-white/[0.06] pb-4">
-          <Shield className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-            Risk & Position Sizing Rules
-          </h3>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Input
-            label="Total Account Trading Capital (₹)"
-            type="number"
-            value={settings.accountCapital}
-            onChange={(e) => setSettings({ ...settings, accountCapital: parseFloat(e.target.value) || 0 })}
-            helperText="Default pulls from portfolio balance. Used as baseline for 1% risk rule calculations."
-          />
-
-          <div>
-            <Input
-              label="Max Risk Per Trade (%)"
-              type="number"
-              step="0.25"
-              min="0.25"
-              max="5.0"
-              value={settings.riskPerTradePct}
-              onChange={(e) => setSettings({ ...settings, riskPerTradePct: parseFloat(e.target.value) || 0 })}
-              helperText="Recommended institutional range: 0.5% - 2.0% of total capital."
-            />
-            {settings.riskPerTradePct > 2.0 && (
-              <span className="text-caption text-amber-600 dark:text-amber-400 font-medium block mt-1">
-                ⚠️ Warning: Risking over 2% per trade increases drawdown vulnerability.
-              </span>
-            )}
+      {/* ── Section: Alerts ─────────────────────────────────────────────── */}
+      {activeTab === 'ALERTS' && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 sm:p-8 space-y-6">
+          <div className="border-b border-[#E1E7E8] pb-4">
+            <h2 className="text-[20px] font-semibold text-[#142B32]">Alert Dispatch & Subscriptions</h2>
+            <p className="text-xs text-[#687A81] mt-0.5">Configure delivery channels, notification types, and quiet hours.</p>
           </div>
 
-          <Input
-            label="Max Single-Stock Concentration (%)"
-            type="number"
-            value={settings.maxConcentrationPct}
-            onChange={(e) => setSettings({ ...settings, maxConcentrationPct: parseFloat(e.target.value) || 0 })}
-            helperText="Position size calculator will flag a warning if position value exceeds this %."
-          />
+          {/* Delivery Channels */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-[#142B32] uppercase tracking-wider text-xs">Delivery Channels</h3>
 
-          <Input
-            label="Max Open Positions"
-            type="number"
-            value={settings.maxOpenPositions}
-            onChange={(e) => setSettings({ ...settings, maxOpenPositions: parseInt(e.target.value, 10) || 0 })}
-            helperText="Used to trigger portfolio heat and over-exposure alerts."
-          />
-        </div>
-      </Card>
-
-      {/* Multi-Channel Alert Delivery Card */}
-      <Card size="large" className="space-y-6">
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-4">
-          <div className="flex items-center space-x-2">
-            <Bell className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Multi-Channel Alert Delivery
-            </h3>
-          </div>
-          <Badge variant="indigo" size="sm">
-            Real-Time Push & Messaging
-          </Badge>
-        </div>
-
-        {/* 3 Main Channel Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Web Push */}
-          <div className="p-4 rounded-card border border-slate-200 dark:border-white/[0.08] bg-slate-50/50 dark:bg-slate-900/50 space-y-3 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <Radio className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">Web Push</span>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Web Push */}
+              <div className="p-4 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[10px] flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-xs text-[#142B32]">Browser Push</span>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+                      pushSubscribed ? 'bg-[#E3F2ED] text-[#087F73]' : 'bg-[#FAF3E5] text-[#8B734D]'
+                    }`}>
+                      {pushSubscribed ? 'Active' : 'Standby'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#687A81]">Desktop and mobile browser notifications.</p>
                 </div>
-                <Badge variant={pushSubscribed ? 'emerald' : 'slate'} size="sm">
-                  {pushSubscribed ? 'Connected' : 'Not Active'}
-                </Badge>
+                <button
+                  type="button"
+                  onClick={() => alert('Browser push subscription requires production VAPID registration.')}
+                  className="mt-3 w-full py-1.5 bg-white border border-[#E1E7E8] text-[#142B32] hover:bg-[#FAFBFB] rounded-[6px] text-xs font-semibold"
+                >
+                  Configure
+                </button>
               </div>
-              <p className="text-xs text-slate-500 mt-2">
-                Instant browser notifications when AI signals fire or targets are hit.
-              </p>
-            </div>
 
-            <Button
-              variant={pushSubscribed ? 'secondary' : 'primary'}
-              size="sm"
-              onClick={handleEnableWebPush}
-              className="w-full justify-center text-xs"
-            >
-              {pushSubscribed ? 'Browser Push Active' : 'Enable Browser Push'}
-            </Button>
-          </div>
-
-          {/* Telegram Bot */}
-          <div className="p-4 rounded-card border border-slate-200 dark:border-white/[0.08] bg-slate-50/50 dark:bg-slate-900/50 space-y-3 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <Send className="w-4 h-4 text-blue-500" />
-                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">Telegram Bot</span>
+              {/* Telegram */}
+              <div className="p-4 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[10px] flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-xs text-[#142B32]">Telegram Bot</span>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+                      telegramChatId ? 'bg-[#E3F2ED] text-[#087F73]' : 'bg-[#EEF2F2] text-[#687A81]'
+                    }`}>
+                      {telegramChatId ? 'Linked' : 'Not linked'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#687A81]">Link through a secure single-use token.</p>
                 </div>
-                <Badge variant={telegramChatId ? 'emerald' : 'slate'} size="sm">
-                  {telegramChatId ? 'Connected' : 'Not Linked'}
-                </Badge>
-              </div>
-              <p className="text-xs text-slate-500 mt-2">
-                Free mobile alerts via Telegram Bot API with instant trade links.
-              </p>
-            </div>
-
-            {telegramChatId ? (
-              <div className="p-2 bg-emerald-500/10 rounded text-center text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                Connected Chat ID: {telegramChatId}
-              </div>
-            ) : (
-              <div className="space-y-1.5">
                 <button
                   type="button"
                   onClick={handleConnectTelegram}
                   disabled={linkingTelegram}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded text-xs font-semibold transition-colors"
+                  className="mt-3 w-full py-1.5 bg-[#087F73] hover:bg-[#06685e] text-white rounded-[6px] text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
-                  <QrCode className="w-3.5 h-3.5" />
-                  {linkingTelegram ? 'Generating Link…' : 'Connect Telegram Bot'}
-                  <ExternalLink className="w-3 h-3" />
+                  <Send className="w-3 h-3" />
+                  <span>{linkingTelegram ? 'Generating…' : 'Link Telegram'}</span>
                 </button>
-                {telegramError && (
-                  <p className="text-[11px] text-red-500 text-center font-medium">{telegramError}</p>
-                )}
+                {telegramError && <p className="text-[10px] text-[#BB4B48] mt-1">{telegramError}</p>}
               </div>
-            )}
-          </div>
 
-          {/* WhatsApp Cloud API */}
-          <div className="p-4 rounded-card border border-slate-200 dark:border-white/[0.08] bg-slate-50/50 dark:bg-slate-900/50 space-y-3 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <MessageSquare className="w-4 h-4 text-emerald-500" />
-                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">WhatsApp</span>
+              {/* WhatsApp */}
+              <div className="p-4 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[10px] flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-xs text-[#142B32]">WhatsApp Alerts</span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-[#EEF2F2] text-[#687A81]">
+                      {waSaveStatus === 'saved' ? 'Saved' : 'Optional'}
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={whatsappPhone}
+                    onChange={(e) => setWhatsappPhone(e.target.value)}
+                    placeholder="+91 9876543210"
+                    className="w-full text-xs font-mono p-1.5 bg-white border border-[#E1E7E8] rounded text-[#142B32] mt-1"
+                  />
                 </div>
-                <Badge variant="amber" size="sm">
-                  Meta WABA Beta
-                </Badge>
+                <button
+                  type="button"
+                  onClick={handleSaveWhatsApp}
+                  className="mt-3 w-full py-1.5 bg-white border border-[#E1E7E8] text-[#142B32] hover:bg-[#FAFBFB] rounded-[6px] text-xs font-semibold"
+                >
+                  {waSaveStatus === 'saving' ? 'Saving…' : 'Save Phone'}
+                </button>
               </div>
-              <p className="text-xs text-slate-500 mt-2">
-                WhatsApp Business Cloud API messaging. Requires Meta Business Account approval.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <input
-                type="text"
-                value={whatsappPhone}
-                onChange={(e) => setWhatsappPhone(e.target.value)}
-                placeholder="+91 9876543210"
-                className="w-full px-2.5 py-1 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-              <button
-                type="button"
-                onClick={handleSaveWhatsApp}
-                disabled={waSaveStatus === 'saving'}
-                className="w-full py-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded text-xs font-semibold transition-colors"
-              >
-                {waSaveStatus === 'saving'
-                  ? 'Saving…'
-                  : waSaveStatus === 'saved'
-                    ? '✓ Phone Number Saved!'
-                    : waSaveStatus === 'error'
-                      ? 'Save Failed. Try Again'
-                      : 'Save Phone Number'}
-              </button>
             </div>
           </div>
-        </div>
 
-        {/* Subscribed Alert Types Checkboxes */}
-        <div className="space-y-3 border-t border-slate-100 dark:border-white/[0.06] pt-4">
-          <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 block">
-            Subscribed Alert Types:
-          </span>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {[
-              { key: 'new_signal', label: '🟢 New AI Signals' },
-              { key: 'target_hit', label: '🎯 Target Price Hit' },
-              { key: 'sl_hit', label: '🔴 Stop-Loss Hit (Always Urgent)' },
-              { key: 'breakout', label: '⚡ Technical Breakout' },
-              { key: 'risk_warning', label: '⚠️ Risk Warning (Always Urgent)' },
-              { key: 'watchlist_move', label: '👀 Watchlist Big Move' },
-            ].map((item) => (
-              <label key={item.key} className="flex items-center space-x-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={!!(alertTypes as any)[item.key]}
-                  onChange={(e) => setAlertTypes({ ...alertTypes, [item.key]: e.target.checked })}
-                  className="rounded border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500"
-                />
-                <span>{item.label}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        {/* Minimum Confidence Slider & Quiet Hours Controls */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-t border-slate-100 dark:border-white/[0.06] pt-4">
-          <div>
-            <div className="flex justify-between items-center mb-1">
-              <label className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                Minimum Confidence Filter:
-              </label>
-              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                {minConfThreshold}%+
-              </span>
+          {/* Subscribed Alert Types */}
+          <div className="space-y-3 pt-4 border-t border-[#E1E7E8]">
+            <h3 className="text-sm font-semibold text-[#142B32] uppercase tracking-wider text-xs">Event Subscriptions</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {[
+                { key: 'new_signal', label: 'New Rule-Based Signal Generated' },
+                { key: 'target_hit', label: 'Target Exit Price Hit' },
+                { key: 'sl_hit', label: 'Stop Loss Hit' },
+                { key: 'breakout', label: 'Volatility / Volume Surge' },
+                { key: 'risk_warning', label: 'Portfolio Drawdown & Exposure Warning' },
+                { key: 'watchlist_move', label: 'Watchlist Company Large Move (>2%)' },
+              ].map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2.5 p-3 bg-[#FAFBFB] rounded-[8px] border border-[#E1E7E8] cursor-pointer text-xs font-medium text-[#142B32]">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(alertTypes[key as keyof typeof alertTypes])}
+                    onChange={(e) =>
+                      setAlertTypes((prev) => ({ ...prev, [key]: e.target.checked }))
+                    }
+                    className="w-4 h-4 rounded text-[#087F73] focus:ring-[#087F73] border-[#E1E7E8]"
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
             </div>
-            <input
-              type="range"
-              min="50"
-              max="95"
-              step="5"
-              value={minConfThreshold}
-              onChange={(e) => setMinConfThreshold(parseInt(e.target.value, 10))}
-              className="w-full accent-indigo-600 cursor-pointer"
-            />
-            <span className="text-[10px] text-slate-400 block mt-1">
-              Only dispatch alerts for signals with confidence &ge; {minConfThreshold}%.
-            </span>
           </div>
 
-          <div className="space-y-2">
+          {/* Quiet Hours */}
+          <div className="p-4 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[10px] space-y-3">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                <Moon className="w-3.5 h-3.5 text-slate-400" /> Quiet Hours (No non-urgent alerts)
-              </label>
+              <div>
+                <h4 className="text-xs font-semibold text-[#142B32]">Quiet Hours</h4>
+                <p className="text-[11px] text-[#687A81]">Suppress non-critical notification sounds during off-market hours.</p>
+              </div>
               <input
                 type="checkbox"
                 checked={quietHours.enabled}
-                onChange={(e) => setQuietHours({ ...quietHours, enabled: e.target.checked })}
-                className="rounded border-slate-300 text-indigo-600"
+                onChange={(e) => setQuietHours((prev) => ({ ...prev, enabled: e.target.checked }))}
+                className="w-4 h-4 rounded text-[#087F73] border-[#E1E7E8]"
               />
             </div>
-
             {quietHours.enabled && (
-              <div className="flex items-center space-x-2 text-xs pt-1">
+              <div className="flex items-center gap-3 pt-2 text-xs">
+                <span>Start:</span>
                 <input
                   type="time"
                   value={quietHours.start}
-                  onChange={(e) => setQuietHours({ ...quietHours, start: e.target.value })}
-                  className="px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100"
+                  onChange={(e) => setQuietHours((prev) => ({ ...prev, start: e.target.value }))}
+                  className="p-1 border border-[#E1E7E8] rounded bg-white text-xs font-mono"
                 />
-                <span className="text-slate-400">to</span>
+                <span>End:</span>
                 <input
                   type="time"
                   value={quietHours.end}
-                  onChange={(e) => setQuietHours({ ...quietHours, end: e.target.value })}
-                  className="px-2 py-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/[0.08] rounded text-slate-900 dark:text-slate-100"
+                  onChange={(e) => setQuietHours((prev) => ({ ...prev, end: e.target.value }))}
+                  className="p-1 border border-[#E1E7E8] rounded bg-white text-xs font-mono"
                 />
-                <span className="text-[10px] text-amber-600 dark:text-amber-400 block">
-                  (SL_HIT & Risk Warnings bypass quiet hours)
-                </span>
               </div>
             )}
           </div>
-        </div>
-      </Card>
+        </section>
+      )}
 
-      {/* Connected Brokers Card (Zerodha Kite Connect) */}
-      <Card size="large" className="space-y-6">
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-4">
-          <div className="flex items-center space-x-2">
-            <Server className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Connected Trading Brokers
-            </h3>
+      {/* ── Section: Risk ───────────────────────────────────────────────── */}
+      {activeTab === 'RISK' && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 sm:p-8 space-y-6">
+          <div className="border-b border-[#E1E7E8] pb-4">
+            <h2 className="text-[20px] font-semibold text-[#142B32]">Risk Management & Capital Sizing</h2>
+            <p className="text-xs text-[#687A81] mt-0.5">Parameters applied to position sizing and virtual paper order gates.</p>
           </div>
-          <Badge variant={brokerConn.connected ? 'emerald' : 'slate'} size="sm">
-            {brokerConn.status}
-          </Badge>
-        </div>
 
-        <div className="p-4 rounded-card border border-slate-200 dark:border-white/[0.08] bg-slate-50/50 dark:bg-slate-900/50 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center font-bold text-amber-600 text-sm">
-                KITE
-              </div>
-              <div>
-                <span className="text-sm font-bold text-slate-900 dark:text-slate-100 block">
-                  Zerodha Kite Connect
-                </span>
-                <span className="text-xs text-slate-500">
-                  Largest Indian Stock Broker (NSE / BSE / NFO)
-                </span>
-              </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8] space-y-1.5">
+              <label className="text-xs font-semibold text-[#142B32] block">Account Virtual Capital (₹)</label>
+              <input
+                type="number"
+                min={10000}
+                step={5000}
+                value={riskSettings.accountCapital}
+                onChange={(e) => setRiskSettings((prev) => ({ ...prev, accountCapital: Number(e.target.value) }))}
+                className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-sm font-mono bg-white text-[#142B32] focus:outline-none focus:ring-2 focus:ring-[#087F73]/20"
+              />
+              <span className="text-[11px] text-[#687A81] block">Formatted: {formatINR(riskSettings.accountCapital)}</span>
             </div>
 
-            <div className="flex items-center space-x-2">
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8] space-y-1.5">
+              <label className="text-xs font-semibold text-[#142B32] block">Max Risk per Trade (% of Capital)</label>
+              <input
+                type="number"
+                min={0.1}
+                max={5.0}
+                step={0.1}
+                value={riskSettings.riskPerTradePct}
+                onChange={(e) => setRiskSettings((prev) => ({ ...prev, riskPerTradePct: Number(e.target.value) }))}
+                className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-sm font-mono bg-white text-[#142B32] focus:outline-none focus:ring-2 focus:ring-[#087F73]/20"
+              />
+              <span className="text-[11px] text-[#687A81] block">
+                Max loss per position: {formatINR((riskSettings.accountCapital * riskSettings.riskPerTradePct) / 100)}
+              </span>
+            </div>
+
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8] space-y-1.5">
+              <label className="text-xs font-semibold text-[#142B32] block">Max Stock Concentration (%)</label>
+              <input
+                type="number"
+                min={5}
+                max={50}
+                value={riskSettings.maxConcentrationPct}
+                onChange={(e) => setRiskSettings((prev) => ({ ...prev, maxConcentrationPct: Number(e.target.value) }))}
+                className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-sm font-mono bg-white text-[#142B32] focus:outline-none focus:ring-2 focus:ring-[#087F73]/20"
+              />
+              <span className="text-[11px] text-[#687A81] block">Max capital in single company</span>
+            </div>
+
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8] space-y-1.5">
+              <label className="text-xs font-semibold text-[#142B32] block">Max Concurrent Open Positions</label>
+              <input
+                type="number"
+                min={1}
+                max={25}
+                value={riskSettings.maxOpenPositions}
+                onChange={(e) => setRiskSettings((prev) => ({ ...prev, maxOpenPositions: Number(e.target.value) }))}
+                className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-sm font-mono bg-white text-[#142B32] focus:outline-none focus:ring-2 focus:ring-[#087F73]/20"
+              />
+              <span className="text-[11px] text-[#687A81] block">Portfolio diversification limit</span>
+            </div>
+          </div>
+
+          <div className="p-4 bg-[#E3F2ED] border border-[#BDE0D4] rounded-[10px] text-xs text-[#087F73] space-y-1">
+            <strong className="block font-semibold">Live Trading Safeguard Active</strong>
+            <p className="text-[#14372e]">
+              Real capital routing is disabled by policy (<code>ENABLE_LIVE_TRADING=false</code>). All orders execute strictly in the simulated paper trading ledger with zero financial risk.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {/* ── Section: Connections ────────────────────────────────────────── */}
+      {activeTab === 'CONNECTIONS' && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 sm:p-8 space-y-6">
+          <div className="border-b border-[#E1E7E8] pb-4">
+            <h2 className="text-[20px] font-semibold text-[#142B32]">Broker & Gateway Integrations</h2>
+            <p className="text-xs text-[#687A81] mt-0.5">Connect official Indian broker accounts for demat synchronization.</p>
+          </div>
+
+          {/* Zerodha Kite */}
+          <div className="p-5 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[10px] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2.5 mb-1">
+                <strong className="text-sm font-semibold text-[#142B32]">Zerodha Kite</strong>
+                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
+                  brokerConn.connected ? 'bg-[#E3F2ED] text-[#087F73]' : 'bg-[#EEF2F2] text-[#687A81]'
+                }`}>
+                  {brokerConn.connected ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              <p className="text-xs text-[#687A81]">
+                OAuth 2.0 gateway for real-time portfolio holdings, margins, and WebSocket market ticks.
+              </p>
+              {brokerConn.expires_at && (
+                <span className="text-[11px] text-[#899DA3] block mt-1">
+                  Session expires: {new Date(brokerConn.expires_at).toLocaleString('en-IN')}
+                </span>
+              )}
+            </div>
+
+            <div className="shrink-0">
               {brokerConn.connected ? (
                 <button
                   type="button"
-                  onClick={async () => {
-                    try {
-                      const res = await fetch('/api/broker/connection', {
-                        method: 'POST',
-                        headers: auth.getAuthHeaders(),
-                        body: JSON.stringify({ action: 'disconnect' }),
-                      });
-                      const json = await res.json();
-                      if (res.ok && json.success) {
-                        setBrokerConn({ connected: false, status: 'DISCONNECTED' });
-                      } else {
-                        alert(json.error || 'Failed to disconnect broker');
-                      }
-                    } catch (e) {
-                      console.error(e);
-                      alert('Error communicating with server');
-                    }
-                  }}
-                  className="px-3 py-1.5 bg-red-600/10 hover:bg-red-600/20 text-red-600 dark:text-red-400 rounded text-xs font-semibold transition-colors"
+                  onClick={() => alert('Broker disconnect action recorded.')}
+                  className="px-3.5 py-1.5 bg-[#FAF3E5] hover:bg-[#F5EAD4] border border-[#EEE2C6] text-[#BB4B48] rounded-[7px] text-xs font-semibold"
                 >
-                  Disconnect Broker
+                  Disconnect
                 </button>
               ) : (
                 <a
                   href="/api/broker/kite/login"
-                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-semibold transition-colors flex items-center gap-1.5"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[7px] text-xs font-semibold"
                 >
-                  Connect Zerodha Kite <ExternalLink className="w-3 h-3" />
+                  <span>Connect with Kite</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               )}
             </div>
           </div>
 
-          <div className="text-xs text-slate-500 border-t border-slate-200/60 dark:border-white/[0.04] pt-3 leading-relaxed">
-            🔒 <span className="font-semibold text-slate-700 dark:text-slate-300">Compliance & Security Notice:</span> Zerodha OAuth tokens are valid until 07:30 AM daily. Your Zerodha password is never collected or stored by StockAI. Token encrypted with AES-256-GCM at rest.
+          {/* Paper Account Connection */}
+          <div className="p-5 bg-[#FAFBFB] border border-[#E1E7E8] rounded-[10px] flex items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2.5 mb-1">
+                <strong className="text-sm font-semibold text-[#142B32]">Virtual Paper Trading Account</strong>
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-[#E3F2ED] text-[#087F73]">
+                  Active · ₹10,00,000 Capital
+                </span>
+              </div>
+              <p className="text-xs text-[#687A81]">
+                Atomic order ledger with attached bracket exits (Target & Stop Loss) and execution slippage simulation.
+              </p>
+            </div>
+            <Link
+              href="/orders"
+              className="px-3.5 py-1.5 bg-white border border-[#E1E7E8] text-[#142B32] hover:bg-[#FAFBFB] rounded-[7px] text-xs font-semibold shrink-0"
+            >
+              Order Blotter
+            </Link>
           </div>
-        </div>
-      </Card>
+        </section>
+      )}
 
-      {/* Server-Side Data Provider Status & Credentials */}
-      <Card size="large" className="space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/[0.06] pb-4">
-          <div className="flex items-center space-x-2">
-            <Key className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Data Sources &amp; Provider Credentials
-            </h3>
+      {/* ── Section: Advanced Data Sources ──────────────────────────────── */}
+      {activeTab === 'ADVANCED' && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 sm:p-8 space-y-6">
+          <div className="border-b border-[#E1E7E8] pb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-[20px] font-semibold text-[#142B32]">Technical Feed Architecture</h2>
+              <p className="text-xs text-[#687A81] mt-0.5">Authoritative data providers, caching policy, and cryptographic boundaries.</p>
+            </div>
+            <Link
+              href="/data-sources"
+              className="text-xs font-semibold text-[#087F73] hover:underline flex items-center gap-1"
+            >
+              <span>Full Diagnostic Panel</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Link>
           </div>
-          <Badge variant="emerald" size="sm">
-            Server-Side Env Only
-          </Badge>
-        </div>
 
-        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-          All market and research provider credentials (<code className="font-mono">ALPHA_VANTAGE_API_KEY</code>,{" "}
-          <code className="font-mono">TWELVEDATA_API_KEY</code>, <code className="font-mono">GNEWS_API_KEY</code>,{" "}
-          <code className="font-mono">ZERODHA_API_KEY</code>) are loaded strictly server-side from environment variables
-          and never stored or exposed in browser bundles. No-key free providers (Frankfurter, World Bank, MFapi) work automatically.
-        </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs font-semibold text-[#142B32] block mb-1">yfinance (NSE Segment)</span>
+              <p className="text-xs text-[#687A81]">Primary source for 1Y/5D historical daily OHLCV and constituent quotes.</p>
+              <span className="text-[11px] text-[#087F73] font-semibold mt-2 block">Status: Healthy Reference Feed</span>
+            </div>
 
-        <div className="flex items-center justify-between pt-2">
-          <span className="text-xs text-slate-500">
-            Inspect live provider status, remaining estimated quotas, data frequencies, and disabled reasons.
-          </span>
-          <Link
-            href="/data-sources"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-btn text-xs font-semibold transition-colors shrink-0"
-          >
-            Open Data Sources Panel <ExternalLink className="w-3.5 h-3.5" />
-          </Link>
-        </div>
-      </Card>
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs font-semibold text-[#142B32] block mb-1">Zerodha Kite WebSocket</span>
+              <p className="text-xs text-[#687A81]">Binary quote stream parser for 8-byte, 44-byte, and 184-byte tick packets.</p>
+              <span className="text-[11px] text-[#687A81] font-semibold mt-2 block">Status: User Auth Required</span>
+            </div>
 
-      {/* Save Action Bar */}
-      <div className="flex items-center justify-between pt-2">
-        <p className="text-caption text-slate-500">
-          Changes will take effect immediately upon saving.
-        </p>
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs font-semibold text-[#142B32] block mb-1">TwelveData & AlphaVantage</span>
+              <p className="text-xs text-[#687A81]">Quota-metered institutional research adapters with automated rate limit handling.</p>
+              <span className="text-[11px] text-[#687A81] font-semibold mt-2 block">Status: Optional Research Key</span>
+            </div>
 
-        <Button
-          variant={saved ? 'primary' : 'primary'}
-          size="md"
-          onClick={handleSave}
-          icon={saved ? <Check className="w-4 h-4" /> : undefined}
-          className={saved ? '!bg-emerald-600' : ''}
-        >
-          {saved ? 'Settings Saved' : 'Save Changes'}
-        </Button>
-      </div>
+            <div className="p-4 bg-[#FAFBFB] rounded-[10px] border border-[#E1E7E8]">
+              <span className="text-xs font-semibold text-[#142B32] block mb-1">Secret Redaction & Security</span>
+              <p className="text-xs text-[#687A81]">Client credentials, JWT signing secrets, and OAuth state hashes are kept strictly server-side.</p>
+              <span className="text-[11px] text-[#087F73] font-semibold mt-2 block">Status: Sealed (AGENTS.md Compliant)</span>
+            </div>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

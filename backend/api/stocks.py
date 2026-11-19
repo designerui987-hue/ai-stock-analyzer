@@ -29,6 +29,7 @@ from services.backtest_service import BacktestEngine
 from services.broker_service import expire_quote_session_if_current, resolve_user_kite_credentials
 from services.kite_ws_collector import kite_ws_collector
 from services.market_data_service import MarketHours, market_data_service
+from services.research_snapshot_service import research_snapshot_service
 
 logger = logging.getLogger("api.stocks")
 
@@ -220,6 +221,19 @@ async def get_stock_quote(
     )
 
 
+@router.get("/brief/personalized")
+async def get_personalized_brief(
+    user_id: Optional[str] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Personalized daily research brief for the authenticated user,
+    incorporating verified watchlist changes, portfolio exposure, and transparent radar criteria.
+    """
+    uid = int(user_id) if user_id and str(user_id).isdigit() else None
+    return await asyncio.to_thread(research_snapshot_service.get_personalized_brief, db, uid)
+
+
 @router.get("/{symbol}")
 async def get_stock_analysis(
     symbol: str,
@@ -347,7 +361,53 @@ async def get_stock_analysis(
     stock_data["ai_analysis"] = stock_data.get("ai_prediction")
     stock_data["technical"] = stock_data.get("technicals")
 
+    # Record verified research snapshot and compute 'What Changed' comparison
+    uid = int(user_id) if user_id and str(user_id).isdigit() else None
+    if stock_data.get("price") is not None and stock_data.get("status") != "unavailable":
+        await asyncio.to_thread(
+            research_snapshot_service.record_snapshot,
+            db,
+            clean,
+            stock_data,
+            stock_data.get("technicals"),
+            stock_data.get("ai_prediction"),
+            ex_upper,
+            uid,
+        )
+
+    what_changed = await asyncio.to_thread(
+        research_snapshot_service.get_snapshot_comparison,
+        db,
+        clean,
+        ex_upper,
+        uid,
+    )
+    stock_data["what_changed"] = what_changed
+
     return stock_data
+
+
+@router.get("/{symbol}/changes")
+async def get_stock_changes(
+    symbol: str,
+    exchange: str = Query("NSE"),
+    user_id: Optional[str] = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get verified 'What Changed' research comparison between current and previous snapshots.
+    Strictly enforces methodology compatibility and never treats missing metrics as zero.
+    """
+    clean = symbol.strip().upper()
+    ex_upper = exchange.strip().upper()
+    uid = int(user_id) if user_id and str(user_id).isdigit() else None
+    return await asyncio.to_thread(
+        research_snapshot_service.get_snapshot_comparison,
+        db,
+        clean,
+        ex_upper,
+        uid,
+    )
 
 
 @router.get("/{symbol}/chart")

@@ -26,6 +26,7 @@ export function ResearchCompanionDrawer() {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [lastFailedQuestion, setLastFailedQuestion] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -42,8 +43,18 @@ export function ResearchCompanionDrawer() {
       setTimeout(() => inputRef.current?.focus(), 150);
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
     window.addEventListener('open-assistant-drawer', handleOpen);
-    return () => window.removeEventListener('open-assistant-drawer', handleOpen);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('open-assistant-drawer', handleOpen);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   useEffect(() => {
@@ -63,6 +74,7 @@ export function ResearchCompanionDrawer() {
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setLoading(true);
+    setLastFailedQuestion(null);
 
     try {
       if (!auth.isAuthenticated()) {
@@ -78,7 +90,13 @@ export function ResearchCompanionDrawer() {
         return;
       }
 
-      const res = await api.sendMessage(question);
+      // Prepend active company context if relevant
+      const outgoingPrompt =
+        symbol && !question.toLowerCase().includes(symbol.toLowerCase())
+          ? `[Context: ${symbol} NSE] ${question}`
+          : question;
+
+      const res = await api.sendMessage(outgoingPrompt);
       if (res && res.response) {
         setMessages((prev) => [
           ...prev,
@@ -91,6 +109,7 @@ export function ResearchCompanionDrawer() {
           },
         ]);
       } else {
+        setLastFailedQuestion(question);
         setMessages((prev) => [
           ...prev,
           {
@@ -102,12 +121,13 @@ export function ResearchCompanionDrawer() {
         ]);
       }
     } catch {
+      setLastFailedQuestion(question);
       setMessages((prev) => [
         ...prev,
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          content: 'Unable to connect to the assistant service.',
+          content: 'Unable to connect to the assistant service. Click retry to attempt again.',
           type: 'system',
         },
       ]);
@@ -221,6 +241,18 @@ export function ResearchCompanionDrawer() {
               <div className="p-3.5 rounded-[10px] bg-[#EAF2EC] border border-[#D8E5DE] mr-4 flex items-center gap-2 text-xs text-[#087F73]">
                 <span className="w-2 h-2 rounded-full bg-[#087F73] animate-ping" />
                 <span>Formulating research response...</span>
+              </div>
+            )}
+            {lastFailedQuestion && !loading && (
+              <div className="flex justify-end pr-4">
+                <button
+                  type="button"
+                  onClick={() => handleAsk(lastFailedQuestion)}
+                  className="px-3 py-1.5 bg-[#FAF3E5] hover:bg-[#F5EAD4] border border-[#EEE2C6] text-[#8B734D] rounded-[7px] text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>Retry previous question</span>
+                </button>
               </div>
             )}
             <div ref={scrollRef} />

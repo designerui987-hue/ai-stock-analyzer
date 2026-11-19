@@ -580,21 +580,13 @@ export async function executePaperLimitFill(
 ): Promise<{ filled: boolean; count: number; reason: string }> {
   return await withAccountLock(prismaClient, params.userId, async (tx) => {
     // 1. Fetch current order state
-    const order = typeof tx.orderLog?.findFirst === 'function'
-      ? await tx.orderLog.findFirst({
-          where: {
-            id: params.orderId,
-            user_id: params.userId,
-            mode: 'PAPER',
-          },
-        })
-      : (await tx.orderLog?.findMany({
-          where: {
-            id: params.orderId,
-            user_id: params.userId,
-            mode: 'PAPER',
-          },
-        }))?.[0];
+    const order = await tx.orderLog.findFirst({
+      where: {
+        id: params.orderId,
+        user_id: params.userId,
+        mode: 'PAPER',
+      },
+    });
 
     if (!order || order.status !== 'OPEN') {
       return {
@@ -607,7 +599,7 @@ export async function executePaperLimitFill(
     let raw: any = {};
     try {
       raw = typeof order.response_raw === 'string' ? JSON.parse(order.response_raw) : order.response_raw || {};
-    } catch {}
+    } catch { }
 
     // 2. Bracket Exit Atomic Claim: If attached exit (Target or SL), ensure sibling hasn't filled
     const isAttachedExit = order.source === 'ATTACHED_TARGET' || order.source === 'ATTACHED_STOP_LOSS';
@@ -615,22 +607,14 @@ export async function executePaperLimitFill(
 
     if (isAttachedExit && parentOrderId) {
       const siblingSource = order.source === 'ATTACHED_TARGET' ? 'ATTACHED_STOP_LOSS' : 'ATTACHED_TARGET';
-      const sibling = typeof tx.orderLog?.findFirst === 'function'
-        ? await tx.orderLog.findFirst({
-            where: {
-              user_id: params.userId,
-              mode: 'PAPER',
-              source: siblingSource,
-              response_raw: { contains: parentOrderId },
-            },
-          })
-        : (await tx.orderLog?.findMany({
-            where: {
-              user_id: params.userId,
-              mode: 'PAPER',
-              source: siblingSource,
-            },
-          }))?.find((o: any) => o.response_raw?.includes(parentOrderId));
+      const sibling = await tx.orderLog.findFirst({
+        where: {
+          user_id: params.userId,
+          mode: 'PAPER',
+          source: siblingSource,
+          response_raw: { contains: parentOrderId },
+        },
+      });
 
       if (sibling && (sibling.status === 'FILLED' || sibling.status === 'COMPLETE')) {
         // Sibling already won and filled! Cancel this exit atomically and do not fill.

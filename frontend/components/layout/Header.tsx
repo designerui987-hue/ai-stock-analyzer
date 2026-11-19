@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Search, Bell, Menu, Command } from 'lucide-react';
 import { CommandPalette } from '@/components/ui/CommandPalette';
 import { evaluateNseSession } from '@/lib/orders/execution';
+import { api } from '@/lib/api';
 
 const PAGE_BREADCRUMBS: Record<string, string> = {
   '/dashboard': 'Today',
@@ -65,26 +66,23 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
       else if (s.session === 'HOLIDAY') label = 'NSE Closed · Holiday';
 
       try {
-        const res = await fetch('/api/market/overview', { cache: 'no-store' });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.market_session) {
-            const serverSession = data.market_session;
-            const isOpen = Boolean(data.is_market_open);
-            let sLabel = isOpen ? 'NSE Open' : 'Market Closed';
-            if (serverSession === 'SPECIAL_SESSION') sLabel = 'NSE Special Session';
-            if (serverSession === 'PRE_OPEN') sLabel = 'NSE Pre-Open';
-            else if (serverSession === 'WEEKEND') sLabel = 'NSE Closed · Weekend';
-            else if (serverSession === 'HOLIDAY') sLabel = 'NSE Closed · Holiday';
-            else if (serverSession === 'POST_CLOSE') sLabel = 'NSE Post-Close';
+        const data = await api.getMarketOverview().catch(() => null);
+        if (data && data.market_session) {
+          const serverSession = data.market_session;
+          const isOpen = Boolean(data.is_market_open);
+          let sLabel = isOpen ? 'NSE Open' : 'Market Closed';
+          if (serverSession === 'SPECIAL_SESSION') sLabel = 'NSE Special Session';
+          else if (serverSession === 'PRE_OPEN') sLabel = 'NSE Pre-Open';
+          else if (serverSession === 'WEEKEND') sLabel = 'NSE Closed · Weekend';
+          else if (serverSession === 'HOLIDAY') sLabel = 'NSE Closed · Holiday';
+          else if (serverSession === 'POST_CLOSE') sLabel = 'NSE Post-Close';
 
-            setMarketStatus({
-              open: isOpen,
-              session: serverSession,
-              label: sLabel,
-            });
-            return;
-          }
+          setMarketStatus({
+            open: isOpen,
+            session: serverSession,
+            label: sLabel,
+          });
+          return;
         }
       } catch {
         // Fallback

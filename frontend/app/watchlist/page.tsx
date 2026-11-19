@@ -133,6 +133,9 @@ export default function WatchlistPage() {
       setNewSymbol('');
       setShowAddModal(false);
       await loadWatchlist();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('watchlist-updated'));
+      }
     } catch (err: any) {
       setModalError(err?.message || 'Failed to add symbol to watchlist.');
     } finally {
@@ -144,19 +147,20 @@ export default function WatchlistPage() {
     try {
       await api.removeFromWatchlist(sym);
       setWatchlistStocks((prev) => prev.filter((s) => s.symbol !== sym));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('watchlist-updated'));
+      }
     } catch (err: any) {
       setError(err?.message || 'Failed to remove symbol from watchlist.');
     }
   };
 
   const getStance = (sym: string, chg: number | null) => {
-    if (sym === 'RELIANCE' || sym === 'ICICIBANK') return { label: 'Mixed signals', tone: 'caution' };
-    if (sym === 'HDFCBANK' || sym === 'SBIN') return { label: 'Improving trend', tone: '' };
-    if (sym === 'TCS') return { label: 'Losing momentum', tone: 'caution' };
-    if (sym === 'INFY') return { label: 'Under pressure', tone: 'caution' };
-    return (chg ?? 0) >= 0
-      ? { label: 'Steady trend', tone: '' }
-      : { label: 'Mixed signals', tone: 'caution' };
+    if (chg === null) return { label: 'Quote unavailable', tone: 'caution' };
+    if (chg > 1.5) return { label: 'Strong momentum', tone: '' };
+    if (chg > 0) return { label: 'Steady trend', tone: '' };
+    if (chg > -1.5) return { label: 'Consolidating', tone: 'caution' };
+    return { label: 'Under pressure', tone: 'caution' };
   };
 
   const filtered = watchlistStocks.filter((s) =>
@@ -173,8 +177,12 @@ export default function WatchlistPage() {
             Your watchlist.
           </h1>
           <p className="text-sm text-[#687A81] mt-1.5">
-            {error
+            {loading && watchlistStocks.length === 0
+              ? 'Loading followed companies…'
+              : error
               ? 'Watchlist status unavailable'
+              : watchlistStocks.length === 0
+              ? 'No companies followed yet. Start by adding companies below.'
               : `${watchlistStocks.length} companies followed. A clearer reason to pay attention.`}
           </p>
         </div>

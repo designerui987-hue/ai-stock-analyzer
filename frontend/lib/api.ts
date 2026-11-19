@@ -190,6 +190,9 @@ export const api = {
   searchStocks: (q: string) => fetchAPI(`/api/stocks/search?q=${q}`),
   listStocks: () => fetchAPI('/api/stocks/list'),
   getStockAnalysis: (symbol: string) => fetchAPI(`/api/stocks/${symbol}`),
+  getResearchChanges: (symbol: string, exchange = 'NSE') =>
+    fetchAPI(`/api/stocks/${encodeURIComponent(symbol)}/changes?exchange=${encodeURIComponent(exchange)}`),
+  getPersonalizedBrief: () => fetchAPI('/api/stocks/brief/personalized'),
   getChartData: (symbol: string, period: string = '1Y') =>
     fetchAPI(`/api/stocks/${symbol}/chart?period=${period}`),
   getQuoteData: (symbol: string, exchange = 'NSE') =>

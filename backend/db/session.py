@@ -35,7 +35,8 @@ def apply_migrations(bind_engine=None):
     """
     Applies forward schema migrations to ensure existing populated databases
     are compatible with current application requirements without data loss.
-    Removes legacy uniqueness restrictions on display names while preserving lookup indexes.
+    1. Removes legacy uniqueness restrictions on display names while preserving lookup indexes.
+    2. Ensures research_snapshots table, columns, indexes, and constraints exist.
     """
     eng = bind_engine or engine
     from sqlalchemy import text
@@ -44,6 +45,7 @@ def apply_migrations(bind_engine=None):
         trans = conn.begin()
         try:
             if backend_name == "postgresql":
+                # 1. Users table migration
                 conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key;"))
                 conn.execute(text("""
                     DO $$
@@ -59,12 +61,103 @@ def apply_migrations(bind_engine=None):
                     $$;
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users (username);"))
+
+                # 2. Research Snapshots table & column forward migration
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS research_snapshots (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        symbol VARCHAR NOT NULL,
+                        exchange VARCHAR NOT NULL DEFAULT 'NSE',
+                        as_of TIMESTAMP WITH TIME ZONE NOT NULL,
+                        price DOUBLE PRECISION NOT NULL,
+                        open_price DOUBLE PRECISION,
+                        high_price DOUBLE PRECISION,
+                        low_price DOUBLE PRECISION,
+                        volume BIGINT,
+                        avg_volume_20d BIGINT,
+                        rsi_14 DOUBLE PRECISION,
+                        sma_20 DOUBLE PRECISION,
+                        sma_50 DOUBLE PRECISION,
+                        sma_200 DOUBLE PRECISION,
+                        macd DOUBLE PRECISION,
+                        macd_signal DOUBLE PRECISION,
+                        vol_surge DOUBLE PRECISION,
+                        signal VARCHAR,
+                        rule_version VARCHAR NOT NULL DEFAULT 'v1.0-deterministic-quant',
+                        timeframe VARCHAR NOT NULL DEFAULT '1D',
+                        lookback_bars INTEGER DEFAULT 250,
+                        adjustment_basis VARCHAR NOT NULL DEFAULT 'split_and_dividend_adjusted',
+                        source VARCHAR NOT NULL DEFAULT 'yfinance/NSE',
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                """))
+                conn.execute(text("ALTER TABLE research_snapshots ADD COLUMN IF NOT EXISTS timeframe VARCHAR NOT NULL DEFAULT '1D';"))
+                conn.execute(text("ALTER TABLE research_snapshots ADD COLUMN IF NOT EXISTS lookback_bars INTEGER DEFAULT 250;"))
+                conn.execute(text("ALTER TABLE research_snapshots ADD COLUMN IF NOT EXISTS adjustment_basis VARCHAR NOT NULL DEFAULT 'split_and_dividend_adjusted';"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_user_id ON research_snapshots (user_id);"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_symbol ON research_snapshots (symbol);"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_as_of ON research_snapshots (as_of);"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_created_at ON research_snapshots (created_at);"))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_snapshot_user_sym_as_of ON research_snapshots (COALESCE(user_id, -1), symbol, exchange, as_of);"))
+
             elif backend_name == "sqlite":
+                # 1. Users table migration
                 try:
                     conn.execute(text("DROP INDEX IF EXISTS ix_users_username;"))
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users (username);"))
                 except Exception:
                     pass
+
+                # 2. Research Snapshots table & column forward migration
+                try:
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS research_snapshots (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                            symbol VARCHAR NOT NULL,
+                            exchange VARCHAR NOT NULL DEFAULT 'NSE',
+                            as_of TIMESTAMP NOT NULL,
+                            price REAL NOT NULL,
+                            open_price REAL,
+                            high_price REAL,
+                            low_price REAL,
+                            volume INTEGER,
+                            avg_volume_20d INTEGER,
+                            rsi_14 REAL,
+                            sma_20 REAL,
+                            sma_50 REAL,
+                            sma_200 REAL,
+                            macd REAL,
+                            macd_signal REAL,
+                            vol_surge REAL,
+                            signal VARCHAR,
+                            rule_version VARCHAR NOT NULL DEFAULT 'v1.0-deterministic-quant',
+                            timeframe VARCHAR NOT NULL DEFAULT '1D',
+                            lookback_bars INTEGER DEFAULT 250,
+                            adjustment_basis VARCHAR NOT NULL DEFAULT 'split_and_dividend_adjusted',
+                            source VARCHAR NOT NULL DEFAULT 'yfinance/NSE',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """))
+                    # Check for existing table missing new columns
+                    cursor = conn.execute(text("PRAGMA table_info(research_snapshots)"))
+                    columns = [row[1] for row in cursor.fetchall()]
+                    if "timeframe" not in columns:
+                        conn.execute(text("ALTER TABLE research_snapshots ADD COLUMN timeframe VARCHAR DEFAULT '1D' NOT NULL;"))
+                    if "lookback_bars" not in columns:
+                        conn.execute(text("ALTER TABLE research_snapshots ADD COLUMN lookback_bars INTEGER DEFAULT 250;"))
+                    if "adjustment_basis" not in columns:
+                        conn.execute(text("ALTER TABLE research_snapshots ADD COLUMN adjustment_basis VARCHAR DEFAULT 'split_and_dividend_adjusted' NOT NULL;"))
+
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_user_id ON research_snapshots (user_id);"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_symbol ON research_snapshots (symbol);"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_as_of ON research_snapshots (as_of);"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_research_snapshots_created_at ON research_snapshots (created_at);"))
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_snapshot_user_sym_as_of ON research_snapshots (user_id, symbol, exchange, as_of);"))
+                except Exception:
+                    pass
+
             trans.commit()
         except Exception:
             trans.rollback()

@@ -5,6 +5,7 @@ from auth.security import get_current_user
 from models.analysis import ChatRequest
 from data.demo_stocks import NIFTY50_STOCKS
 from ai_models.prediction_engine import prediction_engine
+from services.market_data_service import market_data_service
 
 router = APIRouter()
 
@@ -22,42 +23,46 @@ def generate_ai_response(message: str) -> dict:
     if referenced_stocks:
         stock_sym = referenced_stocks[0]
         stock = NIFTY50_STOCKS[stock_sym]
+        quote = market_data_service.get_quote(stock_sym)
+        cur_price = quote.get("price") or stock["price"]
+        cur_chg = quote.get("change_percent") if quote.get("change_percent") is not None else stock["change_pct"]
         pred = prediction_engine.predict(stock_sym)
 
+        rule_ver = pred.get("rule_version", "deterministic-v1")
         if "buy" in msg_lower or "should i" in msg_lower or "invest" in msg_lower:
             response = (
-                f"📊 **{stock['name']} ({stock_sym}) Analysis**\n\n"
-                f"Current Price: ₹{stock['price']:.2f} ({stock['change_pct']:+.2f}%)\n\n"
-                f"🤖 **AI Signal: {pred['signal']}** (Confidence: {pred['confidence']}%)\n\n"
-                f"**Key Metrics:**\n"
-                f"- Risk Score: {pred['risk_score']}/10\n"
-                f"- Entry Price: ₹{pred['entry_price']:.2f}\n"
-                f"- Target Exit: ₹{pred['exit_price']:.2f}\n"
-                f"- Stop Loss: ₹{pred['stop_loss']:.2f}\n"
-                f"- Profit Probability: {pred['profit_probability']}%\n\n"
-                f"**AI Explanation:**\n{pred['explanation']}\n\n"
-                f"⚠️ *This is AI-generated analysis for educational purposes. Always do your own research and consult a financial advisor.*"
+                f"📊 **{stock['name']} ({stock_sym}) Quantitative Research**\n\n"
+                f"Current Price: ₹{cur_price:.2f} ({cur_chg:+.2f}%) [Source: {quote.get('source', 'yfinance')}]\n\n"
+                f"📐 **Rule-Based Observation: {pred['signal']}** (Rule Agreement: {pred['confidence']}% · {rule_ver})\n\n"
+                f"**Technical Factors:**\n"
+                f"- Risk Score: {pred.get('risk_score', 5)}/10\n"
+                f"- Evaluated Entry: ₹{pred['entry_price']:.2f}\n"
+                f"- Model Target: ₹{pred['exit_price']:.2f}\n"
+                f"- Model Stop Loss: ₹{pred['stop_loss']:.2f}\n"
+                f"- Technical Alignment: {pred['confidence']}%\n\n"
+                f"**Quantitative Rationale:**\n{pred.get('explanation') or pred.get('rationale')}\n\n"
+                f"⚠️ *Deterministic quantitative rule evaluation for educational research. Rule agreement does NOT represent a probability of profit. Not investment advice.*"
             )
         elif "analyze" in msg_lower or "analysis" in msg_lower:
             response = (
-                f"📈 **Detailed Analysis: {stock['name']} ({stock_sym})**\n\n"
-                f"**Price:** ₹{stock['price']:.2f} | **Change:** {stock['change_pct']:+.2f}%\n"
+                f"📈 **Technical Evidence: {stock['name']} ({stock_sym})**\n\n"
+                f"**Price:** ₹{cur_price:.2f} | **Change:** {cur_chg:+.2f}%\n"
                 f"**P/E Ratio:** {stock['pe_ratio']} | **Market Cap:** {stock['market_cap']}\n"
                 f"**52W Range:** ₹{stock['week52_low']:.2f} - ₹{stock['week52_high']:.2f}\n\n"
-                f"🤖 **AI Signal: {pred['signal']}** ({pred['confidence']}% confidence)\n\n"
+                f"📐 **Deterministic Signal: {pred['signal']}** ({pred['confidence']}% rule consensus)\n\n"
                 f"**Analysis Factors:**\n"
             )
             for factor in pred["factors"][:5]:
                 response += f"- {factor}\n"
-            response += f"\n{pred['explanation']}"
+            response += f"\n{pred.get('explanation') or pred.get('rationale')}\n\n⚠️ *Quantitative rule observations only. Not investment advice.*"
         else:
             response = (
-                f"Here's a quick look at **{stock['name']}** ({stock_sym}):\n\n"
-                f"- Price: ₹{stock['price']:.2f} ({stock['change_pct']:+.2f}%)\n"
-                f"- AI Signal: **{pred['signal']}** ({pred['confidence']}% confidence)\n"
+                f"Here's the quantitative observation for **{stock['name']}** ({stock_sym}):\n\n"
+                f"- Current Price: ₹{cur_price:.2f} ({cur_chg:+.2f}%)\n"
+                f"- Quantitative Signal: **{pred['signal']}** ({pred['confidence']}% rule consensus · {rule_ver})\n"
                 f"- Sector: {stock['sector']}\n"
-                f"- Market Cap: {stock['market_cap']}\n\n"
-                f"Would you like a detailed analysis or buy/sell recommendation?"
+                f"- Source: {quote.get('source', 'yfinance')} · {quote.get('freshness', 'DELAYED')}\n\n"
+                f"Would you like to examine technical indicators, moving averages, or risk factors?"
             )
 
         suggestions = [

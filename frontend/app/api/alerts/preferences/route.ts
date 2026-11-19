@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
+import { isDbConnectionError, getFallbackAlertPref, updateFallbackAlertPref } from '@/lib/db-fallback';
 import { z } from 'zod';
 
 const PreferencesPostSchema = z.object({
@@ -49,8 +50,9 @@ function parseAlertTypes(raw: string | null | undefined): Record<string, boolean
 }
 
 export async function GET(req: Request) {
+  let userId = 'demo_user';
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
 
     let pref = await prisma.alertPreference.findUnique({
       where: { user_id: userId },
@@ -75,14 +77,24 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
+    if (isDbConnectionError(err)) {
+      const pref = getFallbackAlertPref(userId);
+      return NextResponse.json({
+        success: true,
+        preference: pref,
+        source: 'local_storage_fallback',
+      });
+    }
     console.error('Fetch preferences error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
+  let userId = 'demo_user';
+  let bodyData: any = {};
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
 
     const rawBody = await req.json();
     const parseResult = PreferencesPostSchema.safeParse(rawBody);
@@ -93,6 +105,7 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    bodyData = parseResult.data;
 
     const {
       channels_enabled,
@@ -136,6 +149,14 @@ export async function POST(req: Request) {
   } catch (err: any) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
+    }
+    if (isDbConnectionError(err)) {
+      const pref = updateFallbackAlertPref(userId, bodyData);
+      return NextResponse.json({
+        success: true,
+        preference: pref,
+        source: 'local_storage_fallback',
+      });
     }
     console.error('Update preferences error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

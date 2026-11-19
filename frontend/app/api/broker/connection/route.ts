@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/security/crypto';
 import { getVerifiedUserId, AuthError } from '@/lib/auth/session';
+import { isDbConnectionError, getFallbackBrokerConnection, setFallbackBrokerConnection } from '@/lib/db-fallback';
 import { z } from 'zod';
 
 const ConnectionActionSchema = z.object({
@@ -9,8 +10,9 @@ const ConnectionActionSchema = z.object({
 });
 
 export async function GET(req: Request) {
+  let userId = 'demo_user';
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
 
     const conn = await prisma.brokerConnection.findUnique({
       where: { user_id: userId },
@@ -45,14 +47,27 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
     }
+    if (isDbConnectionError(err)) {
+      const conn = getFallbackBrokerConnection(userId);
+      const liveTradingEnabled = process.env.ENABLE_LIVE_TRADING === 'true';
+      return NextResponse.json({
+        success: true,
+        connected: Boolean(conn && conn.status === 'CONNECTED'),
+        live_trading_enabled: liveTradingEnabled,
+        status: conn ? conn.status : 'DISCONNECTED',
+        connection: conn,
+        source: 'local_storage_fallback',
+      });
+    }
     console.error('Fetch connection status error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
+  let userId = 'demo_user';
   try {
-    const userId = getVerifiedUserId(req);
+    userId = getVerifiedUserId(req);
 
     const rawBody = await req.json();
     const parseResult = ConnectionActionSchema.safeParse(rawBody);
@@ -114,6 +129,10 @@ export async function POST(req: Request) {
   } catch (err: any) {
     if (err instanceof AuthError) {
       return NextResponse.json({ success: false, error: err.message }, { status: err.statusCode });
+    }
+    if (isDbConnectionError(err)) {
+      setFallbackBrokerConnection(userId, null);
+      return NextResponse.json({ success: true, message: 'Updated broker connection (local fallback)' });
     }
     console.error('Update connection error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

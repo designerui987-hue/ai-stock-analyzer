@@ -27,7 +27,7 @@ const PRIMARY_NAV = [
 export default function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [watchCount, setWatchCount] = useState<number>(4);
+  const [watchCount, setWatchCount] = useState<number | null>(null);
   const [username, setUsername] = useState<string>('User');
 
   useEffect(() => {
@@ -40,12 +40,20 @@ export default function Sidebar() {
         const res = await api.getWatchlist().catch(() => null);
         if (res?.success && Array.isArray(res.items)) {
           setWatchCount(res.items.length);
+        } else if (res && Array.isArray(res)) {
+          setWatchCount(res.length);
         }
       } catch {
-        // Fallback default
+        // Leave count as null if unresolvable
       }
     };
     checkUserAndWatchlist();
+
+    const handleUpdate = () => {
+      checkUserAndWatchlist();
+    };
+    window.addEventListener('watchlist-updated', handleUpdate);
+    return () => window.removeEventListener('watchlist-updated', handleUpdate);
   }, [pathname]);
 
   const initials = username.slice(0, 2).toUpperCase() || 'WS';
@@ -112,7 +120,7 @@ export default function Sidebar() {
                 {!collapsed && (
                   <>
                     <span className="truncate">{label}</span>
-                    {hasCount && watchCount > 0 && (
+                    {hasCount && watchCount !== null && (
                       <span className="ml-auto text-xs text-[#c2d1d2] font-mono">
                         {watchCount}
                       </span>

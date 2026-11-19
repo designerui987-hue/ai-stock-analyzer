@@ -382,8 +382,16 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
         </div>
       )}
 
+      {/* ── Loading State ──────────────────────────────────────────────── */}
+      {loading && (
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-3">
+          <RefreshCw className="w-6 h-6 animate-spin text-[#087F73] mx-auto" />
+          <p className="text-xs text-[#687A81]">Loading your verified portfolio holdings…</p>
+        </section>
+      )}
+
       {/* ── Broker Tab Disconnected State ───────────────────────────────── */}
-      {activeTab === 'BROKER' && !brokerConnected && (
+      {activeTab === 'BROKER' && !loading && !brokerConnected && (
         <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
           <div className="w-14 h-14 rounded-xl bg-[#F0F5F3] text-[#087F73] border border-[#E1E7E8] mx-auto flex items-center justify-center">
             <Briefcase className="w-6 h-6" />
