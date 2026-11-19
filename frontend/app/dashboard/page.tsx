@@ -17,7 +17,6 @@ import {
   X,
   RefreshCw,
   AlertTriangle,
-  Compass,
 } from 'lucide-react';
 import { StockLogo } from '@/components/ui/StockLogo';
 import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
@@ -467,8 +466,8 @@ export default function TodayPage() {
             <button
               onClick={() => handleModeChange('brief')}
               className={`px-4 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${mode === 'brief'
-                  ? 'bg-white text-[#142B32] shadow-sm'
-                  : 'text-[#60737A] hover:text-[#142B32]'
+                ? 'bg-white text-[#142B32] shadow-sm'
+                : 'text-[#60737A] hover:text-[#142B32]'
                 }`}
               aria-pressed={mode === 'brief'}
             >
@@ -477,8 +476,8 @@ export default function TodayPage() {
             <button
               onClick={() => handleModeChange('analyst')}
               className={`px-4 py-1.5 rounded-[6px] text-xs font-semibold transition-all ${mode === 'analyst'
-                  ? 'bg-white text-[#142B32] shadow-sm'
-                  : 'text-[#60737A] hover:text-[#142B32]'
+                ? 'bg-white text-[#142B32] shadow-sm'
+                : 'text-[#60737A] hover:text-[#142B32]'
                 }`}
               aria-pressed={mode === 'analyst'}
             >
@@ -944,10 +943,10 @@ export default function TodayPage() {
                             </div>
                             <div
                               className={`text-xs ${chg !== null
-                                  ? isUp
-                                    ? 'text-[#087F73]'
-                                    : 'text-[#BB4B48]'
-                                  : 'text-[#899DA3]'
+                                ? isUp
+                                  ? 'text-[#087F73]'
+                                  : 'text-[#BB4B48]'
+                                : 'text-[#899DA3]'
                                 }`}
                             >
                               {chg !== null ? formatPercent(chg) : 'Unavailable'}
