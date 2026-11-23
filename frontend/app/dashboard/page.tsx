@@ -17,6 +17,7 @@ import {
   X,
   RefreshCw,
   AlertTriangle,
+  Compass,
 } from 'lucide-react';
 import { StockLogo } from '@/components/ui/StockLogo';
 import { FreshnessBadge } from '@/components/ui/FreshnessBadge';
