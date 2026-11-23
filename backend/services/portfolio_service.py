@@ -1,7 +1,7 @@
 """Portfolio service for business logic."""
 
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from config import settings
 from db.models import Portfolio, Holding, User
 from data.demo_stocks import NIFTY50_STOCKS
@@ -57,8 +57,8 @@ class PortfolioService:
             )
 
             stock_demo = NIFTY50_STOCKS.get(symbol, {})
-            name = stock_demo.get("name", symbol)
-            sector = stock_demo.get("sector", "Equity")
+            name = quote.get("name") or stock_demo.get("name", symbol)
+            sector = quote.get("sector") or stock_demo.get("sector", "Equities")
 
             quote_price = quote.get("price")
             quote_status = quote.get("status")
@@ -172,10 +172,26 @@ class PortfolioService:
             valuation_message = f"Valuation unavailable · 0 of {total_count} holdings priced."
             account_current_value = None
 
-        # Sector allocation as percentages (only by current value if fully available, else empty)
-        sector_allocation = {
-            s: round(v / total_current * 100, 1) for s, v in sector_map.items()
-        } if (all_quotes_available and total_current and total_current > 0) else {}
+        # Sector allocation: All weights must use one clearly labelled valuation basis.
+        # If all quotes are available, allocate by current market value.
+        # If incomplete, allocate consistently by invested cost across ALL holdings and label the basis.
+        if all_quotes_available and total_current and total_current > 0:
+            sector_basis = "market_value"
+            sector_allocation = {
+                s: round(v / total_current * 100, 1) for s, v in sector_map.items()
+            }
+        elif total_invested > 0:
+            sector_basis = "invested_cost"
+            cost_map: Dict[str, float] = {}
+            for h in holdings_data:
+                sec = h.get("sector") or "Equities"
+                cost_map[sec] = cost_map.get(sec, 0.0) + (h.get("invested") or 0.0)
+            sector_allocation = {
+                s: round(v / total_invested * 100, 1) for s, v in cost_map.items()
+            }
+        else:
+            sector_basis = "unavailable"
+            sector_allocation = {}
 
         # Sort holdings by pnl_pct (placing None at end)
         sorted_holdings = sorted(
@@ -199,6 +215,7 @@ class PortfolioService:
             "coverage_text": f"{priced_count} of {total_count} holdings priced",
             "valuation_message": valuation_message,
             "holdings": sorted_holdings,
+            "sector_basis": sector_basis,
             "sector_allocation": sector_allocation,
             "top_performer": sorted_holdings[0]["symbol"] if (sorted_holdings and sorted_holdings[0]["pnl_pct"] is not None) else "",
             "worst_performer": sorted_holdings[-1]["symbol"] if (sorted_holdings and sorted_holdings[-1]["pnl_pct"] is not None) else "",

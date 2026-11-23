@@ -275,9 +275,14 @@ class YFinanceProvider(BaseMarketDataProvider):
                 return None
 
             price_f = round(float(price), 2)
-            prev_f = round(float(prev_close), 2) if prev_close else price_f
-            change = round(price_f - prev_f, 2)
-            change_pct = round((change / prev_f) * 100.0, 2) if prev_f > 0 else 0.0
+            if prev_close is not None and float(prev_close) > 0:
+                prev_f = round(float(prev_close), 2)
+                change = round(price_f - prev_f, 2)
+                change_pct = round((change / prev_f) * 100.0, 2)
+            else:
+                prev_f = None
+                change = None
+                change_pct = None
 
             as_of_iso = obs_dt.isoformat() if obs_dt is not None else None
             freshness = MarketHours.calculate_freshness(
@@ -395,9 +400,16 @@ class KiteMarketDataProvider(BaseMarketDataProvider):
                 return None
 
             ohlc = item.get("ohlc") or {}
-            prev_close = float(ohlc.get("close", last_price))
-            change = round(last_price - prev_close, 2)
-            change_pct = round((change / prev_close) * 100.0, 2) if prev_close > 0 else 0.0
+            raw_close = ohlc.get("close")
+            if raw_close is not None and float(raw_close) > 0:
+                prev_close = float(raw_close)
+                change = round(last_price - prev_close, 2)
+                change_pct = round((change / prev_close) * 100.0, 2)
+                prev_f = round(prev_close, 2)
+            else:
+                prev_f = None
+                change = None
+                change_pct = None
 
             exch_dt = _parse_iso_to_utc(item.get("timestamp"))
             ltt_dt = _parse_iso_to_utc(item.get("last_trade_time"))
@@ -415,7 +427,7 @@ class KiteMarketDataProvider(BaseMarketDataProvider):
                 "exchange": ex_upper,
                 "name": clean,
                 "price": round(last_price, 2),
-                "prev_close": round(prev_close, 2),
+                "prev_close": prev_f,
                 "change": change,
                 "change_percent": change_pct,
                 "open": ohlc.get("open"),
@@ -454,25 +466,49 @@ class UpstoxMarketDataProvider(BaseMarketDataProvider):
     """
     Upstox v2 Market Data Provider for private development.
     Uses free read-only Analytics Token / Access Token.
+    Resolves instruments through its instrument directory.
     Strictly preserves instrument, exchange, source, observation time, and freshness.
     """
+
+    # Upstox canonical instrument directory cache for NSE equities (ISIN / exchange keys)
+    _INSTRUMENT_DIRECTORY: Dict[str, str] = {
+        "TCS": "NSE_EQ|INE467B01029",
+        "RELIANCE": "NSE_EQ|INE002A01018",
+        "HDFCBANK": "NSE_EQ|INE040A01034",
+        "INFY": "NSE_EQ|INE009A01021",
+        "ICICIBANK": "NSE_EQ|INE090A01021",
+        "SBIN": "NSE_EQ|INE062A01020",
+        "BHARTIARTL": "NSE_EQ|INE397D01024",
+        "ITC": "NSE_EQ|INE154A01025",
+        "TATAMOTORS": "NSE_EQ|INE155A01022",
+        "LT": "NSE_EQ|INE018A01030",
+    }
 
     def __init__(self, api_key: Optional[str] = None, access_token: Optional[str] = None):
         cfg = settings
         self.api_key = api_key or getattr(cfg, "upstox_api_key", None)
         self.access_token = access_token or getattr(cfg, "upstox_api_secret", None)
+        self.instrument_cache: Dict[str, str] = dict(self._INSTRUMENT_DIRECTORY)
 
     def is_available(self) -> bool:
         return bool(self.api_key and self.access_token)
 
+    def resolve_instrument_key(self, symbol: str, exchange: str = "NSE") -> str:
+        """Resolve a company ticker to canonical Upstox instrument key via the instrument directory."""
+        clean = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
+        ex_upper = exchange.strip().upper()
+        if clean in self.instrument_cache:
+            return self.instrument_cache[clean]
+        return f"{ex_upper}_EQ|{clean}"
+
     def get_quote(self, symbol: str, exchange: str = "NSE") -> Optional[Dict[str, Any]]:
         if not self.is_available():
-            logger.info("Upstox quote requested but credentials not configured (marked blocked).")
+            logger.info("Upstox live quote blocked: credentials not configured.")
             return None
 
         clean = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
         ex_upper = exchange.strip().upper()
-        instrument_key = f"{ex_upper}_EQ|{clean}"
+        instrument_key = self.resolve_instrument_key(clean, ex_upper)
         received_dt = datetime.now(timezone.utc)
 
         try:
@@ -500,9 +536,14 @@ class UpstoxMarketDataProvider(BaseMarketDataProvider):
                     return None
 
                 price_f = round(float(last_price), 2)
-                prev_f = round(float(prev_close), 2) if prev_close else price_f
-                change = round(price_f - prev_f, 2)
-                change_pct = round((change / prev_f) * 100.0, 2) if prev_f > 0 else 0.0
+                if prev_close is not None and float(prev_close) > 0:
+                    prev_f = round(float(prev_close), 2)
+                    change = round(price_f - prev_f, 2)
+                    change_pct = round((change / prev_f) * 100.0, 2)
+                else:
+                    prev_f = None
+                    change = None
+                    change_pct = None
 
                 as_of_iso = obs_dt.isoformat() if obs_dt else None
                 freshness = MarketHours.calculate_freshness(
@@ -534,6 +575,7 @@ class UpstoxMarketDataProvider(BaseMarketDataProvider):
 
     def get_ohlcv(self, symbol: str, period: str = "1Y", exchange: str = "NSE") -> Optional[List[Dict[str, Any]]]:
         if not self.is_available():
+            logger.info("Upstox historical candles blocked: credentials not configured.")
             return None
         return None
 

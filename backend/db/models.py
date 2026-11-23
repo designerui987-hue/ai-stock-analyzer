@@ -76,6 +76,9 @@ class Alert(Base):
     is_triggered = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utcnow)
     triggered_at = Column(DateTime, nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
+    delivery_acknowledged_at = Column(DateTime, nullable=True)
+    delivery_status = Column(String, nullable=True)
 
     user = relationship("User", back_populates="alerts")
 

@@ -108,10 +108,15 @@ async def get_alerts(
     alerts = []
     for alert in db_alerts:
         stock = NIFTY50_STOCKS.get(alert.symbol, {})
-        # Distinguish saved vs triggered vs delivered lifecycle state
-        if alert.triggered_at is not None:
+        # Distinguish saved vs triggered vs delivered lifecycle state:
+        # Delivery is strictly marked ONLY after a delivery channel acknowledges it.
+        if (
+            getattr(alert, "delivered_at", None) is not None
+            or getattr(alert, "delivery_acknowledged_at", None) is not None
+            or getattr(alert, "delivery_status", None) == "DELIVERED"
+        ):
             lifecycle_status = "DELIVERED"
-        elif alert.is_triggered:
+        elif alert.is_triggered or alert.triggered_at is not None:
             lifecycle_status = "TRIGGERED"
         else:
             lifecycle_status = "SAVED"
@@ -129,6 +134,9 @@ async def get_alerts(
             "time": alert.created_at.strftime("%d %b, %H:%M") if alert.created_at else "Recently",
             "created_at": alert.created_at.isoformat() if alert.created_at else None,
             "triggered_at": alert.triggered_at.isoformat() if alert.triggered_at else None,
+            "delivered_at": getattr(alert, "delivered_at", None).isoformat() if getattr(alert, "delivered_at", None) else None,
+            "delivery_acknowledged_at": getattr(alert, "delivery_acknowledged_at", None).isoformat() if getattr(alert, "delivery_acknowledged_at", None) else None,
+            "delivery_status": getattr(alert, "delivery_status", None),
             "read": not alert.is_active,
             "is_active": alert.is_active,
             "is_triggered": alert.is_triggered,

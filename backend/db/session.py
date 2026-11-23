@@ -166,12 +166,43 @@ def apply_migrations(bind_engine=None):
 
                             DROP TABLE "WatchlistItem";
                         END IF;
+
+                        -- Ensure alert delivery tracking columns exist
+                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'alerts') THEN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns WHERE table_name = 'alerts' AND column_name = 'delivered_at'
+                            ) THEN
+                                ALTER TABLE alerts ADD COLUMN delivered_at TIMESTAMP NULL;
+                            END IF;
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns WHERE table_name = 'alerts' AND column_name = 'delivery_acknowledged_at'
+                            ) THEN
+                                ALTER TABLE alerts ADD COLUMN delivery_acknowledged_at TIMESTAMP NULL;
+                            END IF;
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns WHERE table_name = 'alerts' AND column_name = 'delivery_status'
+                            ) THEN
+                                ALTER TABLE alerts ADD COLUMN delivery_status VARCHAR NULL;
+                            END IF;
+                        END IF;
                     END
                     $$;
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_user_id ON watchlist_items (user_id);"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_symbol ON watchlist_items (symbol);"))
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_watchlist_user_symbol ON watchlist_items (user_id, symbol);"))
+
+                # 4. Alerts table forward migration for delivery tracking
+                alerts_check = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='alerts'")).fetchone()
+                if alerts_check:
+                    cursor = conn.execute(text("PRAGMA table_info(alerts)"))
+                    alert_columns = [row[1] for row in cursor.fetchall()]
+                    if "delivered_at" not in alert_columns:
+                        conn.execute(text("ALTER TABLE alerts ADD COLUMN delivered_at DATETIME;"))
+                    if "delivery_acknowledged_at" not in alert_columns:
+                        conn.execute(text("ALTER TABLE alerts ADD COLUMN delivery_acknowledged_at DATETIME;"))
+                    if "delivery_status" not in alert_columns:
+                        conn.execute(text("ALTER TABLE alerts ADD COLUMN delivery_status VARCHAR;"))
 
             elif backend_name == "sqlite":
                 # 1. Users table migration
@@ -301,6 +332,18 @@ def apply_migrations(bind_engine=None):
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_user_id ON watchlist_items (user_id);"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_watchlist_items_symbol ON watchlist_items (symbol);"))
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_watchlist_user_symbol ON watchlist_items (user_id, symbol);"))
+
+                # 4. Alerts table forward migration for delivery tracking
+                alerts_check = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='alerts'")).fetchone()
+                if alerts_check:
+                    cursor = conn.execute(text("PRAGMA table_info(alerts)"))
+                    alert_columns = [row[1] for row in cursor.fetchall()]
+                    if "delivered_at" not in alert_columns:
+                        conn.execute(text("ALTER TABLE alerts ADD COLUMN delivered_at DATETIME;"))
+                    if "delivery_acknowledged_at" not in alert_columns:
+                        conn.execute(text("ALTER TABLE alerts ADD COLUMN delivery_acknowledged_at DATETIME;"))
+                    if "delivery_status" not in alert_columns:
+                        conn.execute(text("ALTER TABLE alerts ADD COLUMN delivery_status VARCHAR;"))
 
             trans.commit()
         except Exception as e:

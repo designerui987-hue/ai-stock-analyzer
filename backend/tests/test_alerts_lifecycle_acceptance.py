@@ -89,12 +89,15 @@ def test_alert_lifecycle_and_account_isolation(test_users_and_client):
     db = SessionLocal()
     db_alert = db.query(Alert).filter(Alert.id == int(alert_id)).first()
     db_alert.is_triggered = True
+    db_alert.triggered_at = datetime.now(timezone.utc)
     db.commit()
 
     get_triggered = client.get("/api/alerts/", headers={"Authorization": f"Bearer {token_a}"})
-    assert get_triggered.json()[0]["status"] == "TRIGGERED"
+    assert get_triggered.json()[0]["status"] == "TRIGGERED", "Must remain TRIGGERED prior to channel delivery ack"
 
-    db_alert.triggered_at = datetime.now(timezone.utc)
+    # Only mark delivery after a channel acknowledges it
+    db_alert.delivery_acknowledged_at = datetime.now(timezone.utc)
+    db_alert.delivery_status = "DELIVERED"
     db.commit()
 
     get_delivered = client.get("/api/alerts/", headers={"Authorization": f"Bearer {token_a}"})

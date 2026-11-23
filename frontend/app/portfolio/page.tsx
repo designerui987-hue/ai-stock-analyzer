@@ -265,16 +265,25 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
     };
   }, [activeHoldings, activeTab, portfolio]);
 
-  // Sector breakdown (by current value if available, else by invested cost)
-  const sectors = useMemo(() => {
+  // Sector breakdown: all weights use one clearly labelled valuation basis
+  const { sectors, sectorBasis, sectorDenominator } = useMemo(() => {
+    const allQuotesAvailable = pricedCount === totalCount && totalCount > 0;
+    const isMarketBasis = allQuotesAvailable && typeof totalCurrentValue === 'number' && totalCurrentValue > 0;
+    const basis = isMarketBasis ? 'market_value' : 'invested_cost';
+    const denominator = isMarketBasis ? totalCurrentValue : totalInvested;
+
     const map: Record<string, number> = {};
     activeHoldings.forEach((h: any) => {
       const sec = h.sector || 'Equities';
-      const val = typeof h.current_value === 'number' ? h.current_value : (h.invested || 0);
+      // When market basis, use current_value for all; when invested_cost, use invested for all. Never mix!
+      const val = isMarketBasis
+        ? (typeof h.current_value === 'number' ? h.current_value : 0)
+        : (h.invested || 0);
       map[sec] = (map[sec] || 0) + val;
     });
-    return map;
-  }, [activeHoldings]);
+
+    return { sectors: map, sectorBasis: basis, sectorDenominator: denominator };
+  }, [activeHoldings, pricedCount, totalCount, totalCurrentValue, totalInvested]);
 
   const hasHoldings = activeHoldings.length > 0;
 
@@ -666,14 +675,17 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
             <aside className="bg-white border border-[#E1E7E8] rounded-[14px] p-6 space-y-4">
               <div>
                 <h2 className="text-[20px] font-semibold text-[#142B32]">Sector exposure</h2>
-                <p className="text-xs text-[#687A81] mt-0.5">By current portfolio value</p>
+                <p className="text-xs text-[#687A81] mt-0.5">
+                  {sectorBasis === 'market_value'
+                    ? 'By current market value'
+                    : `By invested cost · Market value unavailable (${pricedCount} of ${totalCount} priced)`}
+                </p>
               </div>
 
               {/* Allocation Color Bar */}
               <div className="h-3 flex rounded-[4px] overflow-hidden my-4 bg-[#EEF2F2]">
                 {Object.entries(sectors).map(([sec, val], idx) => {
-                  const totalVal = (typeof totalCurrentValue === 'number' && totalCurrentValue > 0) ? totalCurrentValue : (totalInvested > 0 ? totalInvested : 0);
-                  const pct = totalVal > 0 ? (val / totalVal) * 100 : 0;
+                  const pct = sectorDenominator > 0 ? (val / sectorDenominator) * 100 : 0;
                   const colors = ['#087F73', '#406282', '#987433', '#8F6A24', '#687A81'];
                   return (
                     <span
@@ -691,8 +703,7 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
               {/* Allocation List */}
               <div className="divide-y divide-[#E1E7E8] text-xs">
                 {Object.entries(sectors).map(([sec, val]) => {
-                  const totalVal = (typeof totalCurrentValue === 'number' && totalCurrentValue > 0) ? totalCurrentValue : (totalInvested > 0 ? totalInvested : 0);
-                  const pct = totalVal > 0 ? (val / totalVal) * 100 : 0;
+                  const pct = sectorDenominator > 0 ? (val / sectorDenominator) * 100 : 0;
                   return (
                     <div key={sec} className="py-2.5 flex items-center justify-between">
                       <span className="text-[#687A81]">{sec}</span>

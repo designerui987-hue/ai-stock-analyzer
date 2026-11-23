@@ -193,3 +193,81 @@ def test_partially_priced_portfolio():
     assert metrics["priced_count"] == 1
     assert metrics["total_count"] == 2
     assert metrics["valuation_message"] == "Partial valuation · 1 of 2 holdings priced"
+
+
+def test_sector_exposure_basis_regression_182_pct_eliminated():
+    """
+    Regression Test (Beta Blocker 2):
+    Holding 1: 110 TCS bought at ₹1,349.96 (invested ₹1,48,495.60, current quote ₹2,460 -> value ₹2,70,600).
+    Holding 2: 100 ABC bought at ₹1,000.00 (invested ₹1,00,000.00, quote unavailable).
+    Previous bug: mixed TCS current value (₹2,70,600) with ABC cost (₹1,00,000) or divided by partial cost,
+    yielding impossible >100% weights (specifically 182.1%).
+    Fixed behavior:
+    When quotes are incomplete, sector allocation strictly uses invested cost across ALL holdings:
+    Total invested = ₹2,48,495.60.
+    TCS (Technology) weight = 148,495.60 / 248,495.60 = 59.8% (strictly <= 100%).
+    ABC (Industrial) weight = 100,000.00 / 248,495.60 = 40.2% (strictly <= 100%).
+    All weights sum to 100.0% and basis is explicitly 'invested_cost'.
+    """
+    holding_tcs = Holding(
+        id=1,
+        portfolio_id=1,
+        symbol="TCS",
+        qty=110,
+        avg_price=1349.96,
+    )
+    holding_unpriced = Holding(
+        id=2,
+        portfolio_id=1,
+        symbol="ABC",
+        qty=100,
+        avg_price=1000.00,
+    )
+
+    mock_db = MagicMock()
+    mock_market_data = MagicMock()
+
+    def get_quote_side_effect(symbol, **kwargs):
+        if symbol == "TCS":
+            return {
+                "symbol": "TCS",
+                "price": 2460.00,
+                "change": 15.00,
+                "change_percent": 0.61,
+                "status": "ok",
+                "source": "controlled_test",
+                "as_of": "2026-11-23T10:00:00Z",
+                "freshness": "REALTIME",
+                "sector": "Technology",
+            }
+        return {
+            "symbol": "ABC",
+            "price": None,
+            "status": "unavailable",
+            "freshness": "UNAVAILABLE",
+            "sector": "Industrial",
+        }
+
+    mock_market_data.get_quote.side_effect = get_quote_side_effect
+
+    metrics = PortfolioService.calculate_portfolio_metrics(
+        [holding_tcs, holding_unpriced],
+        user_id=1,
+        db=mock_db,
+        market_data_svc=mock_market_data,
+    )
+
+    assert metrics["sector_basis"] == "invested_cost"
+    assert "sector_allocation" in metrics
+    sec_alloc = metrics["sector_allocation"]
+
+    # Invariant: weights must NEVER exceed 100% and must sum to 100.0%
+    total_alloc = sum(sec_alloc.values())
+    assert total_alloc == pytest.approx(100.0, rel=1e-2)
+    for sec, pct in sec_alloc.items():
+        assert pct <= 100.0, f"Sector {sec} exceeded 100%: {pct}% (182.1% regression caught!)"
+        assert pct > 0.0
+
+    assert sec_alloc["Technology"] == pytest.approx(59.8, abs=0.5)
+    assert sec_alloc["Industrial"] == pytest.approx(40.2, abs=0.5)
+

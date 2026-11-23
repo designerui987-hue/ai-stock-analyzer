@@ -3,10 +3,39 @@ import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
 
-const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiZXhwIjoxNzk1NTIyNjY2fQ.QGfUSL_Orljyq3BiEb9FoYo0lE9JAOvZGE3KvJvvDu8";
 const ARTIFACT_DIR = "C:/Users/TT-USER/.gemini/antigravity/brain/ca1d41df-5add-4c7a-a5e3-18946a17f2c5";
 
+async function getDisposableTestToken() {
+  const testEmail = `qa_disposable_${Date.now()}@example.com`;
+  const testPassword = "Password123!";
+  try {
+    const regRes = await fetch("http://127.0.0.1:8000/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: testEmail, password: testPassword, full_name: "Disposable QA" }),
+    });
+    if (regRes.ok) {
+      const data = await regRes.json();
+      return data.token || data.access_token;
+    }
+  } catch (e) {}
+
+  try {
+    const logRes = await fetch("http://127.0.0.1:8000/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "alex@example.com", password: "Password123!" }),
+    });
+    if (logRes.ok) {
+      const data = await logRes.json();
+      return data.token || data.access_token;
+    }
+  } catch (e) {}
+  return "";
+}
+
 async function run() {
+  const token = await getDisposableTestToken();
   const chromeDataDir = path.join(os.tmpdir(), "chrome_cdp_" + Date.now());
   const chromeProc = spawn(
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -80,17 +109,19 @@ async function run() {
   await send("Page.navigate", { url: "http://localhost:3000/login" });
   await new Promise((r) => setTimeout(r, 1500));
 
-  await send("Network.setCookie", {
-    name: "auth_token",
-    value: TOKEN,
-    domain: "localhost",
-    path: "/",
-    expires: Date.now() / 1000 + 86400,
-  });
+  if (token) {
+    await send("Network.setCookie", {
+      name: "auth_token",
+      value: token,
+      domain: "localhost",
+      path: "/",
+      expires: Date.now() / 1000 + 86400,
+    });
 
-  await send("Runtime.evaluate", {
-    expression: `localStorage.setItem('auth_token', '${TOKEN}');`
-  });
+    await send("Runtime.evaluate", {
+      expression: `localStorage.setItem('auth_token', '${token}');`,
+    });
+  }
 
   async function capture(url, filename, width = 1440, height = 900, isMobile = false) {
     console.log(`Capturing ${url} -> ${filename} (${width}x${height})...`);

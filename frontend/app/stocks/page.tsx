@@ -242,35 +242,43 @@ function ExploreContent() {
                 {filtered.map((x) => {
                   const lq = liveQuotes[x.symbol];
                   const hasRealPrice = lq && typeof lq.price === 'number' && lq.price > 0 && lq.status !== 'unavailable';
-                  const hasRealChange = lq && typeof lq.change_percent === 'number' && lq.status !== 'unavailable';
+                  const hasRealChange = lq && typeof lq.change_percent === 'number' && lq.change_percent !== null && !isNaN(lq.change_percent) && lq.status !== 'unavailable';
                   const isUp = hasRealChange ? lq.change_percent > 0 : false;
                   const isZero = hasRealChange && lq.change_percent === 0;
                   const isFollowing = watchlisted.has(x.symbol);
                   const isPending = followPending === x.symbol;
+                  const isStale = lq?.freshness === 'STALE';
 
                   // Derive factual research observation from verified quote data
                   let observationText = 'Observation unavailable';
                   let observationClass = 'text-[#687A81] bg-[#EEF2F2]';
 
-                  if (hasRealPrice && hasRealChange) {
+                  if (isStale) {
+                    const dateStr = lq.as_of ? new Date(lq.as_of).toISOString().slice(0, 10) : 'Stale';
+                    const src = lq.source || 'Cache';
+                    if (hasRealChange) {
+                      const moveStr = lq.change_percent > 0 ? `+${lq.change_percent.toFixed(2)}%` : isZero ? '0.00%' : `${lq.change_percent.toFixed(2)}%`;
+                      observationText = `Stale move (${moveStr}) · ${dateStr} · ${src}`;
+                    } else {
+                      observationText = `Cached observation [${dateStr} · ${src}]`;
+                    }
+                    observationClass = 'text-[#8B734D] bg-[#FAF3E5] border-[#EEE2C6]';
+                  } else if (hasRealPrice && hasRealChange) {
                     if (lq.change_percent >= 1.5) {
-                      observationText = `Strong 1D advance (+${lq.change_percent}%) · Verified`;
+                      observationText = `Strong 1D advance (+${lq.change_percent.toFixed(2)}%) · Verified`;
                       observationClass = 'text-[#087F73] bg-[#EAF2EC] border-[#D8E5DE]';
                     } else if (lq.change_percent <= -1.5) {
-                      observationText = `1D decline (${lq.change_percent}%) · Verified`;
+                      observationText = `1D decline (${lq.change_percent.toFixed(2)}%) · Verified`;
                       observationClass = 'text-[#BB4B48] bg-[#FAF3F0] border-[#F2D6D3]';
                     } else if (isZero) {
                       observationText = 'Unchanged session · Verified';
                       observationClass = 'text-[#687A81] bg-[#EEF2F2] border-[#E1E7E8]';
                     } else {
-                      observationText = `${lq.change_percent > 0 ? '+' : ''}${lq.change_percent}% 1D move · Verified`;
+                      observationText = `${lq.change_percent > 0 ? '+' : ''}${lq.change_percent.toFixed(2)}% 1D move · Verified`;
                       observationClass = lq.change_percent > 0
                         ? 'text-[#087F73] bg-[#EAF2EC] border-[#D8E5DE]'
                         : 'text-[#BB4B48] bg-[#FAF3F0] border-[#F2D6D3]';
                     }
-                  } else if (lq?.freshness === 'STALE') {
-                    observationText = `Cached observation [${lq.as_of ? new Date(lq.as_of).toLocaleDateString('en-IN') : 'Stale'}]`;
-                    observationClass = 'text-[#8B734D] bg-[#FAF3E5] border-[#EEE2C6]';
                   }
 
                   return (
@@ -292,8 +300,15 @@ function ExploreContent() {
 
                       <td className="py-3.5 px-6 text-right font-mono">
                         {hasRealPrice ? (
-                          <div className="font-semibold text-[#142B32]">
-                            {formatINR(lq.price, 2)}
+                          <div>
+                            <div className="font-semibold text-[#142B32]">
+                              {formatINR(lq.price, 2)}
+                            </div>
+                            {isStale && (
+                              <div className="text-[10px] text-[#8B734D] font-sans mt-0.5">
+                                STALE · {lq.source || 'Cache'}
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="text-xs font-medium text-[#687A81]">
@@ -304,12 +319,19 @@ function ExploreContent() {
 
                       <td className="py-3.5 px-6 text-right font-mono">
                         {hasRealChange ? (
-                          <div
-                            className={`text-xs font-semibold ${
-                              isUp ? 'text-[#087F73]' : isZero ? 'text-[#687A81]' : 'text-[#BB4B48]'
-                            }`}
-                          >
-                            {formatPercent(lq.change_percent)}
+                          <div>
+                            <div
+                              className={`text-xs font-semibold ${
+                                isUp ? 'text-[#087F73]' : isZero ? 'text-[#687A81]' : 'text-[#BB4B48]'
+                              }`}
+                            >
+                              {formatPercent(lq.change_percent)}
+                            </div>
+                            {isStale && (
+                              <div className="text-[10px] text-[#8B734D] font-sans mt-0.5" title={`Observed ${lq.as_of || 'unknown'} via ${lq.source || 'Cache'}`}>
+                                {lq.as_of ? new Date(lq.as_of).toISOString().slice(0, 10) : 'Stale'} · {lq.source || 'Cache'}
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="text-xs text-[#899DA3]">
