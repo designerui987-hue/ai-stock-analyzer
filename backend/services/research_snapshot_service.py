@@ -716,16 +716,14 @@ class ResearchSnapshotService:
             if freshness in ("STALE", "UNAVAILABLE") or quote.get("status") == "unavailable":
                 continue
 
-            # Validate observation timestamp: if provided, reject invalid or future dates
+            # Observation timestamp: preserve verified timestamp or None if missing (never invent datetime.now())
             raw_as_of = quote.get("as_of") or quote.get("exchange_timestamp")
-            as_of_dt: Optional[datetime] = None
-            if raw_as_of is not None:
+            as_of_dt = None
+            if raw_as_of:
                 as_of_dt = ResearchSnapshotService._parse_datetime(raw_as_of)
                 if as_of_dt is None:
-                    # Invalid or future timestamp provided -> reject
+                    # Invalid or future timestamp (>300s clock skew) -> reject
                     continue
-            else:
-                as_of_dt = datetime.now(timezone.utc)
 
             change_pct = quote.get("change_percent") or quote.get("change_pct") or 0.0
             volume_ratio = tech.get("vol_surge") or tech.get("volume_ratio")
@@ -734,7 +732,7 @@ class ResearchSnapshotService:
             sma50 = tech.get("sma_50")
             sector = quote.get("sector") or NIFTY50_STOCKS.get(clean, {}).get("sector", "Equity")
             source = quote.get("source") or "yfinance/NSE"
-            as_of = as_of_dt.isoformat()
+            as_of = as_of_dt.isoformat() if as_of_dt else None
 
             item_triggers = []
 

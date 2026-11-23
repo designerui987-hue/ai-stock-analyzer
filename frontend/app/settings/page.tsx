@@ -81,6 +81,10 @@ export default function SettingsPage() {
 
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [showDisconnectModal, setShowDisconnectModal] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
 
   useEffect(() => {
     const currentUser = auth.getUser();
@@ -195,9 +199,13 @@ export default function SettingsPage() {
 
   const handleSaveAll = async () => {
     setIsSaving(true);
+    setSaveError(null);
+    setSavedSuccess(false);
     try {
-      // 1. Save research mode
+      // 1. Save local preferences
       localStorage.setItem('stockai_research_mode', researchMode);
+      localStorage.setItem('stockai_auto_refresh_quotes', String(autoRefreshQuotes));
+      localStorage.setItem('stockai_order_product_default', orderProductDefault);
 
       // 2. Save account-scoped risk settings
       if (user?.id) {
@@ -205,9 +213,12 @@ export default function SettingsPage() {
       }
 
       // 3. Save alert preferences to backend
-      await fetch('/api/alerts/preferences', {
+      const res = await fetch('/api/alerts/preferences', {
         method: 'POST',
-        headers: auth.getAuthHeaders(),
+        headers: {
+          'Content-Type': 'application/json',
+          ...auth.getAuthHeaders(),
+        },
         body: JSON.stringify({
           channels_enabled: channels,
           alert_types_subscribed: alertTypes,
@@ -218,10 +229,42 @@ export default function SettingsPage() {
         }),
       });
 
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || errJson.detail || `Server returned error (${res.status}) saving settings.`);
+      }
+
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Failed to save settings. Please verify connectivity and try again.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleDisconnectBroker = async () => {
+    setIsDisconnecting(true);
+    setDisconnectError(null);
+    try {
+      const res = await fetch('/api/broker/connection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...auth.getAuthHeaders(),
+        },
+        body: JSON.stringify({ action: 'disconnect' }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Disconnect failed with status ${res.status}`);
+      }
+      setBrokerConn({ connected: false, status: 'DISCONNECTED' });
+      setShowDisconnectModal(false);
+    } catch (err: any) {
+      setDisconnectError(err?.message || 'Failed to disconnect broker.');
+    } finally {
+      setIsDisconnecting(false);
     }
   };
 
@@ -264,6 +307,22 @@ export default function SettingsPage() {
           )}
         </button>
       </div>
+
+      {/* ── Inline Error on Save Failure ───────────────────────────────── */}
+      {saveError && (
+        <div className="p-4 bg-[#FAF3E5] border border-[#EEE2C6] text-[#8B734D] rounded-[10px] text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-[#BB4B48] shrink-0" />
+            <span className="font-medium text-[#BB4B48]">{saveError}</span>
+          </div>
+          <button
+            onClick={() => setSaveError(null)}
+            className="text-xs text-[#687A81] hover:text-[#142B32]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* ── Settings Category Tabs ──────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-1 p-1 bg-[#EEF2F2] border border-[#E1E7E8] rounded-[9px] w-fit">
@@ -667,8 +726,8 @@ export default function SettingsPage() {
               {brokerConn.connected ? (
                 <button
                   type="button"
-                  onClick={() => alert('Broker disconnect action recorded.')}
-                  className="px-3.5 py-1.5 bg-[#FAF3E5] hover:bg-[#F5EAD4] border border-[#EEE2C6] text-[#BB4B48] rounded-[7px] text-xs font-semibold"
+                  onClick={() => setShowDisconnectModal(true)}
+                  className="px-3.5 py-1.5 bg-[#FAF3E5] hover:bg-[#F5EAD4] border border-[#EEE2C6] text-[#BB4B48] rounded-[7px] text-xs font-semibold transition-colors"
                 >
                   Disconnect
                 </button>
@@ -750,6 +809,53 @@ export default function SettingsPage() {
             </div>
           </div>
         </section>
+      )}
+
+      {/* ── Broker Disconnect Confirmation Modal ────────────────────────── */}
+      {showDisconnectModal && (
+        <div className="fixed inset-0 bg-[#0c232c]/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-[16px] max-w-sm w-full p-6 shadow-2xl border border-[#E1E7E8] space-y-4">
+            <div className="space-y-2">
+              <h3 className="text-base font-semibold text-[#142B32]">Disconnect Zerodha Kite?</h3>
+              <p className="text-xs text-[#687A81] leading-relaxed">
+                Disconnecting your broker account will stop syncing live holdings and margins. You can reconnect anytime via Kite OAuth login.
+              </p>
+            </div>
+
+            {disconnectError && (
+              <p className="text-xs text-[#BB4B48] font-medium">{disconnectError}</p>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDisconnectModal(false);
+                  setDisconnectError(null);
+                }}
+                disabled={isDisconnecting}
+                className="flex-1 py-2 bg-white border border-[#E1E7E8] hover:bg-[#FAFBFB] text-[#142B32] rounded-[7px] text-xs font-semibold transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDisconnectBroker}
+                disabled={isDisconnecting}
+                className="flex-1 py-2 bg-[#BB4B48] hover:bg-[#a33f3c] text-white rounded-[7px] text-xs font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {isDisconnecting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Disconnecting…</span>
+                  </>
+                ) : (
+                  <span>Disconnect</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

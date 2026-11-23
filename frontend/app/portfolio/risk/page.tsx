@@ -27,9 +27,12 @@ export default function PortfolioRiskDashboard() {
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
   const [realHoldings, setRealHoldings] = React.useState<HoldingPosition[] | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [fetchError, setFetchError] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
+  const loadRiskData = React.useCallback(() => {
     let mounted = true;
+    setLoading(true);
+    setFetchError(null);
     import('@/lib/api').then(({ api }) => {
       api.getPortfolio()
         .then((port) => {
@@ -41,7 +44,7 @@ export default function PortfolioRiskDashboard() {
               qty: Number(h.qty || h.quantity),
               avg_price: Number(h.avg_price),
               current_price: typeof h.current_price === 'number' && h.current_price > 0 ? h.current_price : Number(h.avg_price),
-              stop_loss: parseFloat((Number(h.avg_price) * 0.94).toFixed(2)),
+              stop_loss: h.stop_loss ? parseFloat(Number(h.stop_loss).toFixed(2)) : null,
               sector: h.sector || 'NSE Equity',
             }));
             setRealHoldings(mapped);
@@ -49,8 +52,11 @@ export default function PortfolioRiskDashboard() {
             setRealHoldings([]);
           }
         })
-        .catch(() => {
-          if (mounted) setRealHoldings([]);
+        .catch((err) => {
+          if (mounted) {
+            setFetchError(err?.message || 'Unable to load portfolio risk telemetry. Please retry.');
+            setRealHoldings(null);
+          }
         })
         .finally(() => {
           if (mounted) setLoading(false);
@@ -59,10 +65,32 @@ export default function PortfolioRiskDashboard() {
     return () => { mounted = false; };
   }, []);
 
+  React.useEffect(() => {
+    loadRiskData();
+  }, [loadRiskData]);
+
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto space-y-6 py-12 animate-fade-in text-center">
         <p className="text-sm text-slate-500">Loading portfolio risk telemetry...</p>
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="space-y-6 animate-fade-in max-w-xl mx-auto py-12 text-center">
+        <div className="bg-white border border-[#E1E7E8] rounded-[14px] p-8 space-y-4 shadow-sm">
+          <AlertTriangle className="w-8 h-8 text-[#BB4B48] mx-auto" />
+          <h2 className="text-lg font-semibold text-[#142B32]">Unable to Load Risk Telemetry</h2>
+          <p className="text-xs text-[#687A81]">{fetchError}</p>
+          <button
+            onClick={() => loadRiskData()}
+            className="px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[7px] text-xs font-semibold"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -324,15 +352,31 @@ export default function PortfolioRiskDashboard() {
                   <td className="py-3 px-3 text-right font-mono text-slate-900 dark:text-slate-100 font-medium">
                     ₹{pos.current_val.toLocaleString()}
                   </td>
-                  <td className="py-3 px-3 text-right font-mono text-red-600 dark:text-red-400">
-                    ₹{pos.stop_loss.toFixed(2)}
-                  </td>
-                  <td className="py-3 px-3 text-right font-mono font-bold text-red-600 dark:text-red-400">
-                    -₹{pos.risk_amount.toLocaleString()}
-                  </td>
-                  <td className="py-3 px-4 text-right font-mono font-semibold text-slate-900 dark:text-slate-100">
-                    {pos.risk_pct_of_capital}%
-                  </td>
+                  {pos.stop_loss !== null ? (
+                    <>
+                      <td className="py-3 px-3 text-right font-mono text-red-600 dark:text-red-400">
+                        ₹{pos.stop_loss.toFixed(2)}
+                      </td>
+                      <td className="py-3 px-3 text-right font-mono font-bold text-red-600 dark:text-red-400">
+                        -₹{pos.risk_amount?.toLocaleString() ?? 0}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        {pos.risk_pct_of_capital ?? 0}%
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="py-3 px-3 text-right text-xs text-slate-400 italic">
+                        No stop set
+                      </td>
+                      <td className="py-3 px-3 text-right text-xs text-slate-400">
+                        —
+                      </td>
+                      <td className="py-3 px-4 text-right text-xs text-slate-400">
+                        —
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>

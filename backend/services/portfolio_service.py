@@ -28,8 +28,14 @@ class PortfolioService:
         return portfolio
 
     @staticmethod
-    def calculate_portfolio_metrics(holdings: List[Holding], user_id: int, db: Session) -> dict:
+    def calculate_portfolio_metrics(
+        holdings: List[Holding],
+        user_id: int,
+        db: Session,
+        market_data_svc: Optional[Any] = None,
+    ) -> dict:
         """Calculate portfolio metrics from database holdings with real quote verification."""
+        svc = market_data_svc or market_data_service
         holdings_data = []
         total_invested = 0.0
         total_current = 0.0
@@ -43,7 +49,7 @@ class PortfolioService:
             total_invested += invested
 
             # Fetch authoritative quote from market_data_service
-            quote = market_data_service.get_quote(
+            quote = svc.get_quote(
                 symbol,
                 skip_cache=False,
                 user_id=str(user_id),
@@ -56,10 +62,12 @@ class PortfolioService:
 
             quote_price = quote.get("price")
             quote_status = quote.get("status")
+            quote_freshness = quote.get("freshness")
             quote_valid = (
                 isinstance(quote_price, (int, float)) and
                 quote_price > 0 and
-                quote_status not in ("unavailable", None)
+                quote_status != "unavailable" and
+                quote_freshness != "UNAVAILABLE"
             )
 
             if quote_valid:
@@ -118,6 +126,9 @@ class PortfolioService:
                 "freshness": freshness,
             })
 
+        priced_count = sum(1 for h in holdings_data if h["current_value"] is not None)
+        total_count = len(holdings_data)
+
         if not holdings:
             return {
                 "status": "empty",
@@ -128,6 +139,10 @@ class PortfolioService:
                 "day_pnl": 0.0,
                 "day_pnl_pct": 0.0,
                 "holdings_count": 0,
+                "priced_count": 0,
+                "total_count": 0,
+                "coverage_text": "0 of 0 holdings priced",
+                "valuation_message": "Empty portfolio",
                 "holdings": [],
                 "sector_allocation": {},
                 "top_performer": "",
@@ -139,17 +154,28 @@ class PortfolioService:
             total_pnl_pct = (total_pnl / total_invested) * 100.0 if total_invested > 0 else 0.0
             day_pnl_pct = (total_day_change / total_current) * 100.0 if total_current > 0 else 0.0
             status = "available"
+            valuation_message = f"Based on latest quotes · {priced_count} of {total_count} holdings priced"
+            account_current_value = round(total_current, 2)
+        elif priced_count > 0:
+            total_pnl = None
+            total_pnl_pct = None
+            day_pnl_pct = None
+            status = "partial"
+            valuation_message = f"Partial valuation · {priced_count} of {total_count} holdings priced"
+            account_current_value = None
         else:
             total_pnl = None
             total_pnl_pct = None
             day_pnl_pct = None
             total_current = None
             status = "unavailable"
+            valuation_message = f"Valuation unavailable · 0 of {total_count} holdings priced."
+            account_current_value = None
 
-        # Sector allocation as percentages
+        # Sector allocation as percentages (only by current value if fully available, else empty)
         sector_allocation = {
             s: round(v / total_current * 100, 1) for s, v in sector_map.items()
-        } if (total_current and total_current > 0) else {}
+        } if (all_quotes_available and total_current and total_current > 0) else {}
 
         # Sort holdings by pnl_pct (placing None at end)
         sorted_holdings = sorted(
@@ -161,12 +187,17 @@ class PortfolioService:
         return {
             "status": status,
             "total_invested": round(total_invested, 2),
-            "current_value": round(total_current, 2) if total_current is not None else None,
+            "current_value": account_current_value,
+            "priced_subtotal": round(total_current, 2) if (total_current is not None and total_current > 0) else None,
             "total_pnl": round(total_pnl, 2) if total_pnl is not None else None,
             "total_pnl_pct": round(total_pnl_pct, 2) if total_pnl_pct is not None else None,
             "day_pnl": round(total_day_change, 2) if all_quotes_available else None,
             "day_pnl_pct": round(day_pnl_pct, 2) if day_pnl_pct is not None else None,
             "holdings_count": len(holdings_data),
+            "priced_count": priced_count,
+            "total_count": total_count,
+            "coverage_text": f"{priced_count} of {total_count} holdings priced",
+            "valuation_message": valuation_message,
             "holdings": sorted_holdings,
             "sector_allocation": sector_allocation,
             "top_performer": sorted_holdings[0]["symbol"] if (sorted_holdings and sorted_holdings[0]["pnl_pct"] is not None) else "",

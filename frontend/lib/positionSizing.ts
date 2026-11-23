@@ -165,7 +165,7 @@ export interface HoldingPosition {
   qty: number;
   avg_price: number;
   current_price: number;
-  stop_loss?: number;
+  stop_loss?: number | null;
   sector: string;
 }
 
@@ -174,39 +174,54 @@ export interface PortfolioHeatResult {
   total_risk_amount: number;
   total_heat_pct: number;
   is_heat_warning: boolean;
+  has_unprotected_positions: boolean;
+  positions_with_sl_count: number;
+  total_positions_count: number;
   positions_risk: {
     symbol: string;
     qty: number;
     current_val: number;
-    stop_loss: number;
-    risk_amount: number;
-    risk_pct_of_capital: number;
+    stop_loss: number | null;
+    risk_amount: number | null;
+    risk_pct_of_capital: number | null;
   }[];
 }
 
 export function calculatePortfolioHeat(holdings: HoldingPosition[], accountCapital: number): PortfolioHeatResult {
   let totalValue = 0;
   let totalRisk = 0;
+  let slCount = 0;
 
   const positionsRisk = holdings.map((h) => {
     const currentVal = h.qty * h.current_price;
     totalValue += currentVal;
 
-    // Use explicit SL if available, otherwise default to 5% trailing SL below avg price
-    const sl = h.stop_loss || h.avg_price * 0.95;
-    const riskPerShare = Math.max(0, h.current_price - sl);
-    const riskAmount = h.qty * riskPerShare;
-    totalRisk += riskAmount;
+    const hasSl = typeof h.stop_loss === 'number' && h.stop_loss > 0;
+    if (hasSl) {
+      slCount++;
+      const sl = h.stop_loss!;
+      const riskPerShare = Math.max(0, h.current_price - sl);
+      const riskAmount = h.qty * riskPerShare;
+      totalRisk += riskAmount;
+      const riskPctOfCap = accountCapital > 0 ? (riskAmount / accountCapital) * 100 : 0;
 
-    const riskPctOfCap = accountCapital > 0 ? (riskAmount / accountCapital) * 100 : 0;
+      return {
+        symbol: h.symbol,
+        qty: h.qty,
+        current_val: parseFloat(currentVal.toFixed(2)),
+        stop_loss: parseFloat(sl.toFixed(2)),
+        risk_amount: parseFloat(riskAmount.toFixed(2)),
+        risk_pct_of_capital: parseFloat(riskPctOfCap.toFixed(2)),
+      };
+    }
 
     return {
       symbol: h.symbol,
       qty: h.qty,
       current_val: parseFloat(currentVal.toFixed(2)),
-      stop_loss: parseFloat(sl.toFixed(2)),
-      risk_amount: parseFloat(riskAmount.toFixed(2)),
-      risk_pct_of_capital: parseFloat(riskPctOfCap.toFixed(2)),
+      stop_loss: null,
+      risk_amount: null,
+      risk_pct_of_capital: null,
     };
   });
 
@@ -219,6 +234,9 @@ export function calculatePortfolioHeat(holdings: HoldingPosition[], accountCapit
     total_risk_amount: parseFloat(totalRisk.toFixed(2)),
     total_heat_pct: totalHeatPct,
     is_heat_warning: isHeatWarning,
+    has_unprotected_positions: slCount < holdings.length,
+    positions_with_sl_count: slCount,
+    total_positions_count: holdings.length,
     positions_risk: positionsRisk,
   };
 }

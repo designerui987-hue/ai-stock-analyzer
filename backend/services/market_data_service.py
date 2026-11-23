@@ -315,6 +315,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                 "source": "yfinance",
                 "is_realtime": False,
                 "freshness": freshness,
+                "status": "ok" if freshness != "UNAVAILABLE" else "unavailable",
             }
         except Exception as exc:
             logger.warning("YFinance quote error for %s: %s", yf_symbol, exc)
@@ -436,6 +437,7 @@ class KiteMarketDataProvider(BaseMarketDataProvider):
                 "source": "kite",
                 "is_realtime": obs_dt is not None,
                 "freshness": freshness,
+                "status": "ok" if freshness != "UNAVAILABLE" else "unavailable",
             }
         except Exception as exc:
             logger.warning("Kite quote error for %s: %s", instrument, exc)
@@ -445,6 +447,94 @@ class KiteMarketDataProvider(BaseMarketDataProvider):
         return None
 
     def get_ohlcv(self, symbol: str, period: str = "1Y", exchange: str = "NSE") -> Optional[List[Dict[str, Any]]]:
+        return None
+
+
+class UpstoxMarketDataProvider(BaseMarketDataProvider):
+    """
+    Upstox v2 Market Data Provider for private development.
+    Uses free read-only Analytics Token / Access Token.
+    Strictly preserves instrument, exchange, source, observation time, and freshness.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, access_token: Optional[str] = None):
+        cfg = settings
+        self.api_key = api_key or getattr(cfg, "upstox_api_key", None)
+        self.access_token = access_token or getattr(cfg, "upstox_api_secret", None)
+
+    def is_available(self) -> bool:
+        return bool(self.api_key and self.access_token)
+
+    def get_quote(self, symbol: str, exchange: str = "NSE") -> Optional[Dict[str, Any]]:
+        if not self.is_available():
+            logger.info("Upstox quote requested but credentials not configured (marked blocked).")
+            return None
+
+        clean = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
+        ex_upper = exchange.strip().upper()
+        instrument_key = f"{ex_upper}_EQ|{clean}"
+        received_dt = datetime.now(timezone.utc)
+
+        try:
+            url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={instrument_key}"
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self.access_token}",
+            }
+            with httpx.Client(timeout=5.0) as client:
+                res = client.get(url, headers=headers)
+                if res.status_code != 200:
+                    logger.warning("Upstox quote HTTP %d: %s", res.status_code, res.text[:120])
+                    return None
+                data = res.json().get("data", {})
+                quote_entry = data.get(instrument_key) or (list(data.values())[0] if data else None)
+                if not quote_entry:
+                    return None
+
+                last_price = quote_entry.get("last_price")
+                prev_close = quote_entry.get("ohlc", {}).get("close") or quote_entry.get("close")
+                raw_ts = quote_entry.get("timestamp")
+                obs_dt = _parse_iso_to_utc(raw_ts)
+
+                if last_price is None or float(last_price) <= 0:
+                    return None
+
+                price_f = round(float(last_price), 2)
+                prev_f = round(float(prev_close), 2) if prev_close else price_f
+                change = round(price_f - prev_f, 2)
+                change_pct = round((change / prev_f) * 100.0, 2) if prev_f > 0 else 0.0
+
+                as_of_iso = obs_dt.isoformat() if obs_dt else None
+                freshness = MarketHours.calculate_freshness(
+                    as_of=obs_dt,
+                    is_realtime=True,
+                    reference_time=received_dt,
+                )
+
+                return {
+                    "symbol": clean,
+                    "exchange": ex_upper,
+                    "name": clean,
+                    "price": price_f,
+                    "prev_close": prev_f,
+                    "change": change,
+                    "change_percent": change_pct,
+                    "open": quote_entry.get("ohlc", {}).get("open"),
+                    "high": quote_entry.get("ohlc", {}).get("high"),
+                    "low": quote_entry.get("ohlc", {}).get("low"),
+                    "volume": quote_entry.get("volume"),
+                    "as_of": as_of_iso,
+                    "source": "Upstox",
+                    "freshness": freshness,
+                    "status": "ok" if freshness != "UNAVAILABLE" else "unavailable",
+                }
+        except Exception as exc:
+            logger.warning("Upstox quote error for %s: %s", clean, exc)
+            return None
+
+    def get_ohlcv(self, symbol: str, period: str = "1Y", exchange: str = "NSE") -> Optional[List[Dict[str, Any]]]:
+        if not self.is_available():
+            return None
         return None
 
 
@@ -459,11 +549,13 @@ class MarketDataService:
         cache: Optional[CacheLayer] = None,
         yfinance_provider: Optional[BaseMarketDataProvider] = None,
         kite_provider: Optional[KiteMarketDataProvider] = None,
+        upstox_provider: Optional[UpstoxMarketDataProvider] = None,
     ):
         self.cache = cache or CacheLayer()
         kite_ws_collector._cache = self.cache
         self.yfinance_provider = yfinance_provider or YFinanceProvider()
         self.kite_provider = kite_provider or KiteMarketDataProvider()
+        self.upstox_provider = upstox_provider or UpstoxMarketDataProvider()
 
     def get_quote(
         self,
@@ -561,6 +653,13 @@ class MarketDataService:
                 connection_status = "TOKEN_EXPIRED"
                 kite_res = None
             quote = kite_res
+            if quote:
+                self.cache.set(cache_key, QUOTE_CACHE_TTL_SECONDS, json.dumps(quote))
+                return quote
+
+        # 4b. Upstox read-only provider for private development if configured
+        if not quote and self.upstox_provider.is_available():
+            quote = self.upstox_provider.get_quote(clean_symbol, exchange=ex_upper)
             if quote:
                 self.cache.set(cache_key, QUOTE_CACHE_TTL_SECONDS, json.dumps(quote))
                 return quote

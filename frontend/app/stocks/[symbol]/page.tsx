@@ -50,6 +50,8 @@ export default function CompanyResearchPage() {
   const [alertDirection, setAlertDirection] = useState<'above' | 'below'>('above');
   const [alertPrice, setAlertPrice] = useState<string>('');
   const [alertSavedMsg, setAlertSavedMsg] = useState<string | null>(null);
+  const [alertError, setAlertError] = useState<string | null>(null);
+  const [alertSubmitting, setAlertSubmitting] = useState<boolean>(false);
 
   // Order Placement Modal State (Paper Trading)
   const [showOrderModal, setShowOrderModal] = useState<boolean>(false);
@@ -78,6 +80,7 @@ export default function CompanyResearchPage() {
         setLoading(true);
         setUserHolding(null);
         setWatchlisted(false);
+        setChartData([]); // Never display previous company chart on navigation
 
         // Check watchlist & user holdings for personalized exposure
         if (auth.isAuthenticated()) {
@@ -112,7 +115,7 @@ export default function CompanyResearchPage() {
         setLiveStock(data);
 
         // Fetch chart data
-        fetchChart(selectedRange);
+        fetchChart(selectedRange, symbol);
 
         // SSE Real-time price stream: preserve verified tick metadata without promoting unknown data to LIVE
         unsubStream = api.subscribePriceStream([symbol], (payload: any) => {
@@ -163,9 +166,16 @@ export default function CompanyResearchPage() {
     }
   }, []);
 
-  const fetchChart = (range: string) => {
-    api.getChartData(symbol, range)
+  const activeChartReq = React.useRef<{ symbol: string; range: string }>({ symbol: '', range: '' });
+
+  const fetchChart = (range: string, targetSym: string = symbol) => {
+    activeChartReq.current = { symbol: targetSym, range };
+    api.getChartData(targetSym, range)
       .then((data) => {
+        // Discard responses from out-of-order rapid switches or stale ranges
+        if (activeChartReq.current.symbol !== targetSym || activeChartReq.current.range !== range) {
+          return;
+        }
         if (Array.isArray(data) && data.length > 0) {
           setChartData(
             data.map((d: any) => ({
@@ -173,14 +183,20 @@ export default function CompanyResearchPage() {
               value: Number(d.close),
             }))
           );
+        } else {
+          setChartData([]);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (activeChartReq.current.symbol === targetSym && activeChartReq.current.range === range) {
+          setChartData([]);
+        }
+      });
   };
 
   const handleRangeChange = (r: string) => {
     setSelectedRange(r);
-    fetchChart(r);
+    fetchChart(r, symbol);
   };
 
   const handleToggleWatchlist = async () => {
@@ -1073,19 +1089,44 @@ export default function CompanyResearchPage() {
               </div>
             ) : (
               <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
-                  setAlertSavedMsg(`Alert saved: ${symbol} price ${alertDirection === 'above' ? 'rises above' : 'falls below'} ₹${alertPrice}`);
-                  setTimeout(() => {
-                    setShowAlertModal(false);
-                    setAlertSavedMsg(null);
-                  }, 1800);
+                  const target = parseFloat(alertPrice);
+                  if (isNaN(target) || target <= 0) {
+                    setAlertError('Please enter a valid price greater than zero.');
+                    return;
+                  }
+                  setAlertSubmitting(true);
+                  setAlertError(null);
+                  try {
+                    await api.createAlert(symbol, target, 'price_target', alertDirection);
+                    setAlertSavedMsg(`Alert saved: ${symbol} at ₹${target.toFixed(2)} (${alertDirection === 'above' ? 'rises above' : 'falls below'})`);
+                    if (typeof window !== 'undefined') {
+                      window.dispatchEvent(new CustomEvent('alerts-updated'));
+                    }
+                    setTimeout(() => {
+                      setShowAlertModal(false);
+                      setAlertSavedMsg(null);
+                      setAlertPrice('');
+                    }, 1500);
+                  } catch (err: any) {
+                    setAlertError(err?.message || 'Failed to save alert on server. Please retry.');
+                  } finally {
+                    setAlertSubmitting(false);
+                  }
                 }}
                 className="space-y-3"
               >
                 <p className="text-xs text-[#687A81]">
                   Save a price level you want to revisit for {companyName}.
                 </p>
+
+                {alertError && (
+                  <div className="p-2.5 bg-[#FAF3F0] border border-[#F2D6D3] text-[#BB4B48] rounded-[6px] text-xs font-medium">
+                    {alertError}
+                  </div>
+                )}
+
                 <div>
                   <label className="text-xs font-semibold text-[#142B32] block mb-1">
                     Alert Condition
@@ -1107,16 +1148,20 @@ export default function CompanyResearchPage() {
                     type="number"
                     step="0.05"
                     value={alertPrice}
-                    onChange={(e) => setAlertPrice(e.target.value)}
+                    onChange={(e) => {
+                      setAlertPrice(e.target.value);
+                      if (alertError) setAlertError(null);
+                    }}
                     required
                     className="w-full p-2 border border-[#E1E7E8] rounded-[7px] text-xs font-mono bg-white text-[#142B32]"
                   />
                 </div>
                 <button
                   type="submit"
-                  className="w-full py-2 bg-[#087F73] hover:bg-[#076f64] text-white rounded-[7px] text-xs font-semibold mt-2"
+                  disabled={alertSubmitting}
+                  className="w-full py-2 bg-[#087F73] hover:bg-[#076f64] text-white rounded-[7px] text-xs font-semibold mt-2 disabled:opacity-50"
                 >
-                  Save Alert
+                  {alertSubmitting ? 'Saving Alert...' : 'Save Alert'}
                 </button>
               </form>
             )}

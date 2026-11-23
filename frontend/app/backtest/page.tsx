@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -41,8 +42,12 @@ const POPULAR_NSE_SYMBOLS = [
   'SBIN',
 ];
 
-export default function BacktestPage() {
-  const [symbol, setSymbol] = useState('RELIANCE');
+function BacktestContent() {
+  const searchParams = useSearchParams();
+  const initialParam = searchParams.get('symbol') || 'RELIANCE';
+  const cleanParam = initialParam.toUpperCase().replace('.NS', '');
+
+  const [symbol, setSymbol] = useState(cleanParam);
   const [customSymbol, setCustomSymbol] = useState('');
   const [years, setYears] = useState(3);
   const [initialCapital, setInitialCapital] = useState(100000);
@@ -62,10 +67,13 @@ export default function BacktestPage() {
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail?.reason || `Backtest failed with status ${res.status}`);
+        throw new Error(errJson.detail?.reason || errJson.detail || `Backtest failed with status ${res.status}`);
       }
 
       const data = await res.json();
+      if (data.status === 'unavailable') {
+        throw new Error(data.reason || 'Historical market data is unavailable for this ticker.');
+      }
       setResult(data);
     } catch (err: any) {
       setError(err.message || 'Failed to complete backtest');
@@ -76,8 +84,8 @@ export default function BacktestPage() {
   };
 
   useEffect(() => {
-    runBacktest('RELIANCE', 3, 100000);
-  }, []);
+    runBacktest(cleanParam, 3, 100000);
+  }, [cleanParam]);
 
   const metrics = result?.metrics;
   const benchmark = result?.benchmark;
@@ -345,12 +353,12 @@ export default function BacktestPage() {
                     }}
                     formatter={(val: any, name: any) => [
                       `₹${Number(val).toLocaleString()}`,
-                      name === 'equity' ? `Strategy (${result.symbol})` : 'NIFTY 50 Benchmark',
+                      name === 'strategy' || name === 'equity' ? `Strategy (${result.symbol})` : 'NIFTY 50 Benchmark',
                     ]}
                   />
                   <Line
                     type="monotone"
-                    dataKey="equity"
+                    dataKey="strategy"
                     stroke="#4f46e5"
                     strokeWidth={2}
                     dot={false}
@@ -522,49 +530,58 @@ export default function BacktestPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-white/5 font-mono">
-                  {trades.map((t: any, idx: number) => (
-                    <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.02]">
-                      <td className="py-2 text-slate-600 dark:text-slate-400">{t.entry_date}</td>
-                      <td className="py-2 text-slate-600 dark:text-slate-400">{t.exit_date}</td>
-                      <td className="py-2">
-                        <Badge variant={t.side === 'BUY' ? 'emerald' : 'red'} size="sm">
-                          {t.side}
-                        </Badge>
-                      </td>
-                      <td className="py-2 font-semibold text-slate-900 dark:text-slate-100">₹{t.entry_price}</td>
-                      <td className="py-2 font-semibold text-slate-900 dark:text-slate-100">₹{t.exit_price}</td>
-                      <td
-                        className={`py-2 text-right font-bold ${
-                          t.return_pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-                        }`}
-                      >
-                        {t.return_pct > 0 ? `+${t.return_pct}%` : `${t.return_pct}%`}
-                      </td>
-                      <td
-                        className={`py-2 text-right font-bold ${
-                          t.net_pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
-                        }`}
-                      >
-                        {t.net_pnl >= 0 ? `+₹${t.net_pnl.toLocaleString()}` : `-₹${Math.abs(t.net_pnl).toLocaleString()}`}
-                      </td>
-                      <td className="py-2 text-right text-slate-400 text-[11px]">
-                        ₹{t.friction_paid}
-                      </td>
-                      <td className="py-2 text-center">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-sans font-medium ${
-                            t.exit_reason === 'TARGET_HIT'
-                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                              : t.exit_reason === 'STOP_LOSS_HIT'
-                              ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                              : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                  {trades.map((t: any, idx: number) => {
+                    const side = t.side || t.type || 'BUY';
+                    const retPct = t.return_pct ?? t.net_return_pct;
+                    const pnl = t.net_pnl ?? 0;
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-white/[0.02]">
+                        <td className="py-2 text-slate-600 dark:text-slate-400">{t.entry_date}</td>
+                        <td className="py-2 text-slate-600 dark:text-slate-400">{t.exit_date}</td>
+                        <td className="py-2">
+                          <Badge variant={side === 'BUY' ? 'emerald' : 'red'} size="sm">
+                            {side}
+                          </Badge>
+                        </td>
+                        <td className="py-2 font-semibold text-slate-900 dark:text-slate-100">₹{t.entry_price}</td>
+                        <td className="py-2 font-semibold text-slate-900 dark:text-slate-100">₹{t.exit_price}</td>
+                        <td
+                          className={`py-2 text-right font-bold ${
+                            typeof retPct === 'number' && retPct >= 0
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-red-600 dark:text-red-400'
                           }`}
                         >
-                          {t.exit_reason}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                          {typeof retPct === 'number'
+                            ? (retPct > 0 ? `+${retPct}%` : `${retPct}%`)
+                            : '—'}
+                        </td>
+                        <td
+                          className={`py-2 text-right font-bold ${
+                            pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+                          }`}
+                        >
+                          {pnl >= 0 ? `+₹${pnl.toLocaleString()}` : `-₹${Math.abs(pnl).toLocaleString()}`}
+                        </td>
+                        <td className="py-2 text-right text-slate-400 text-[11px]">
+                          ₹{t.friction_paid}
+                        </td>
+                        <td className="py-2 text-center">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-sans font-medium ${
+                              t.exit_reason === 'TARGET_HIT'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                : t.exit_reason === 'STOP_LOSS_HIT'
+                                ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                                : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {t.exit_reason}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -572,6 +589,20 @@ export default function BacktestPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function BacktestPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8 text-center text-xs text-slate-400 font-mono">
+          Loading backtest engine…
+        </div>
+      }
+    >
+      <BacktestContent />
+    </Suspense>
   );
 }
 

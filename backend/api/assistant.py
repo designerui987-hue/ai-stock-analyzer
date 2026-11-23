@@ -24,15 +24,31 @@ def generate_ai_response(message: str) -> dict:
         stock_sym = referenced_stocks[0]
         stock = NIFTY50_STOCKS[stock_sym]
         quote = market_data_service.get_quote(stock_sym)
-        cur_price = quote.get("price") or stock["price"]
-        cur_chg = quote.get("change_percent") if quote.get("change_percent") is not None else stock["change_pct"]
+        has_real_quote = quote.get("status") != "unavailable" and isinstance(quote.get("price"), (int, float))
+        
+        if has_real_quote:
+            cur_price_str = f"₹{quote['price']:.2f}"
+            cur_chg_str = f"{quote.get('change_percent', 0.0):+.2f}%"
+            source_str = f"{quote.get('source', 'market_data')}"
+            as_of_str = f" [as of {quote.get('as_of', 'latest session')}]" if quote.get('as_of') else ""
+        elif settings.demo_mode:
+            cur_price_str = f"₹{stock['price']:.2f} (DEMO)"
+            cur_chg_str = f"{stock['change_pct']:+.2f}%"
+            source_str = "demo_fixture"
+            as_of_str = ""
+        else:
+            cur_price_str = "Unavailable"
+            cur_chg_str = "Unavailable"
+            source_str = "unavailable"
+            as_of_str = ""
+
         pred = prediction_engine.predict(stock_sym)
 
         rule_ver = pred.get("rule_version", "deterministic-v1")
         if "buy" in msg_lower or "should i" in msg_lower or "invest" in msg_lower:
             response = (
                 f"📊 **{stock['name']} ({stock_sym}) Quantitative Research**\n\n"
-                f"Current Price: ₹{cur_price:.2f} ({cur_chg:+.2f}%) [Source: {quote.get('source', 'yfinance')}]\n\n"
+                f"Current Price: {cur_price_str} ({cur_chg_str}) [Source: {source_str}]{as_of_str}\n\n"
                 f"📐 **Rule-Based Observation: {pred['signal']}** (Rule Agreement: {pred['confidence']}% · {rule_ver})\n\n"
                 f"**Technical Factors:**\n"
                 f"- Risk Score: {pred.get('risk_score', 5)}/10\n"
@@ -46,8 +62,8 @@ def generate_ai_response(message: str) -> dict:
         elif "analyze" in msg_lower or "analysis" in msg_lower:
             response = (
                 f"📈 **Technical Evidence: {stock['name']} ({stock_sym})**\n\n"
-                f"**Price:** ₹{cur_price:.2f} | **Change:** {cur_chg:+.2f}%\n"
-                f"**P/E Ratio:** {stock['pe_ratio']} | **Market Cap:** {stock['market_cap']}\n"
+                f"**Price:** {cur_price_str} | **Change:** {cur_chg_str} [Source: {source_str}]{as_of_str}\n"
+                f"**P/E Ratio:** {stock.get('pe_ratio', 'N/A')} | **Market Cap:** {stock.get('market_cap', 'N/A')}\n"
                 f"**52W Range:** ₹{stock['week52_low']:.2f} - ₹{stock['week52_high']:.2f}\n\n"
                 f"📐 **Deterministic Signal: {pred['signal']}** ({pred['confidence']}% rule consensus)\n\n"
                 f"**Analysis Factors:**\n"

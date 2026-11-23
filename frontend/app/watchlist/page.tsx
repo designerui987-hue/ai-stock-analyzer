@@ -156,7 +156,7 @@ export default function WatchlistPage() {
   };
 
   const getStance = (sym: string, chg: number | null) => {
-    if (chg === null) return { label: 'Quote unavailable', tone: 'caution' };
+    if (chg === null) return { label: 'Observation unavailable', tone: 'caution' };
     if (chg > 1.5) return { label: 'Strong momentum', tone: '' };
     if (chg > 0) return { label: 'Steady trend', tone: '' };
     if (chg > -1.5) return { label: 'Consolidating', tone: 'caution' };
@@ -278,6 +278,26 @@ export default function WatchlistPage() {
         <div className="bg-white border border-[#E1E7E8] rounded-[14px] p-8 text-center text-xs text-[#687A81]">
           Loading watchlist records and quotes...
         </div>
+      ) : error && watchlistStocks.length === 0 ? (
+        /* Service failure when no previous cache exists */
+        <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
+          <div className="w-14 h-14 rounded-xl bg-[#FAF3E5] text-[#8B734D] border border-[#EEE2C6] mx-auto flex items-center justify-center">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-[20px] font-semibold text-[#142B32]">Watchlist service temporarily unavailable</h2>
+            <p className="text-xs text-[#687A81] max-w-sm mx-auto mt-2 leading-relaxed">
+              {error}
+            </p>
+          </div>
+          <button
+            onClick={loadWatchlist}
+            className="px-4 py-2 bg-[#142B32] hover:bg-[#203c44] text-white rounded-[8px] text-xs font-semibold inline-flex items-center gap-1.5"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Retry connection</span>
+          </button>
+        </section>
       ) : !loading && !error && watchlistStocks.length === 0 ? (
         /* Empty State */
         <section className="bg-white border border-[#E1E7E8] rounded-[14px] p-12 text-center space-y-4">
@@ -316,61 +336,75 @@ export default function WatchlistPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#EDF0F0]">
-                {filtered.map((x) => {
-                  const chg = x.change_pct ?? 0;
-                  const isUp = chg >= 0;
-                  const stance = getStance(x.symbol, x.change_pct);
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-8 text-center text-xs text-[#687A81]">
+                      No companies found matching &ldquo;{filterQuery}&rdquo;.
+                      <button
+                        onClick={() => setFilterQuery('')}
+                        className="ml-2 text-[#087F73] font-semibold hover:underline"
+                      >
+                        Clear filter
+                      </button>
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((x) => {
+                    const chg = x.change_pct ?? 0;
+                    const isUp = chg >= 0;
+                    const stance = getStance(x.symbol, x.change_pct);
 
-                  return (
-                    <tr key={x.symbol} className="hover:bg-[#F9FBFA] transition-colors">
-                      <td className="py-3.5 px-6">
-                        <div className="flex items-center gap-3">
-                          <StockLogo symbol={x.symbol} size="sm" />
-                          <div>
-                            <Link
-                              href={`/stocks/${x.symbol}`}
-                              className="font-semibold text-[#142B32] hover:text-[#087F73] transition-colors"
-                            >
-                              {x.symbol}
-                            </Link>
-                            <div className="text-xs text-[#687A81]">{x.exchange}</div>
+                    return (
+                      <tr key={x.symbol} className="hover:bg-[#F9FBFA] transition-colors">
+                        <td className="py-3.5 px-6">
+                          <div className="flex items-center gap-3">
+                            <StockLogo symbol={x.symbol} size="sm" />
+                            <div>
+                              <Link
+                                href={`/stocks/${x.symbol}`}
+                                className="font-semibold text-[#142B32] hover:text-[#087F73] transition-colors"
+                              >
+                                {x.symbol}
+                              </Link>
+                              <div className="text-xs text-[#687A81]">{x.exchange}</div>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-6 text-right font-mono">
-                        <div className="font-semibold text-[#142B32]">
-                          {typeof x.price === 'number' ? formatINR(x.price, 2) : '—'}
-                        </div>
-                        <div
-                          className={`text-xs ${
-                            isUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
-                          }`}
-                        >
-                          {typeof x.price === 'number' ? formatPercent(chg) : 'Unavailable'}
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-6 hidden sm:table-cell">
-                        <span className={`stance ${stance.tone}`}>{stance.label}</span>
-                      </td>
-                      <td className="py-3.5 px-6 text-right">
-                        <button
-                          onClick={() => handleRemove(x.symbol)}
-                          className="p-1.5 text-[#687A81] hover:text-[#BB4B48] rounded hover:bg-[#EEF2F2] transition-colors"
-                          aria-label={`Remove ${x.symbol} from watchlist`}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td className="py-3.5 px-6 text-right font-mono">
+                          <div className="font-semibold text-[#142B32]">
+                            {typeof x.price === 'number' ? formatINR(x.price, 2) : '—'}
+                          </div>
+                          <div
+                            className={`text-xs ${
+                              isUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
+                            }`}
+                          >
+                            {typeof x.price === 'number' ? formatPercent(chg) : 'Unavailable'}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-6 hidden sm:table-cell">
+                          <span className={`stance ${stance.tone}`}>{stance.label}</span>
+                        </td>
+                        <td className="py-3.5 px-6 text-right">
+                          <button
+                            onClick={() => handleRemove(x.symbol)}
+                            className="p-1.5 text-[#687A81] hover:text-[#BB4B48] rounded hover:bg-[#EEF2F2] transition-colors"
+                            aria-label={`Remove ${x.symbol} from watchlist`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
 
           <div className="p-4 px-6 border-t border-[#E1E7E8] text-xs text-[#687A81] bg-[#FAFBFA] flex items-center justify-between">
             <span>
-              {lastAsOf ? `Last synchronized at ${lastAsOf}` : 'Real-time NSE quotes'}
+              {lastAsOf ? `Last synchronized at ${lastAsOf}` : 'Quotes as of latest market feed'}
             </span>
             <span>{watchlistStocks.length} followed</span>
           </div>

@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Search, Bell, Menu, Command } from 'lucide-react';
+import { Search, Bell, Menu, Command, X, Trash2, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 import { CommandPalette } from '@/components/ui/CommandPalette';
 import { evaluateNseSession } from '@/lib/orders/execution';
-import { api } from '@/lib/api';
+import { api, auth } from '@/lib/api';
 
 const PAGE_BREADCRUMBS: Record<string, string> = {
   '/dashboard': 'Today',
@@ -27,6 +28,60 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const [cmdOpen, setCmdOpen] = useState(false);
+
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [deletingAlertId, setDeletingAlertId] = useState<string | null>(null);
+  const alertDropdownRef = useRef<HTMLDivElement>(null);
+
+  const fetchAlerts = useCallback(async () => {
+    if (!auth.isAuthenticated()) {
+      setAlerts([]);
+      return;
+    }
+    setAlertsLoading(true);
+    try {
+      const data = await api.getAlerts().catch(() => null);
+      if (Array.isArray(data)) {
+        setAlerts(data);
+      }
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAlerts();
+    const handleUpdate = () => fetchAlerts();
+    window.addEventListener('alerts-updated', handleUpdate);
+    return () => window.removeEventListener('alerts-updated', handleUpdate);
+  }, [fetchAlerts]);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (alertDropdownRef.current && !alertDropdownRef.current.contains(e.target as Node)) {
+        setAlertsOpen(false);
+      }
+    };
+    if (alertsOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [alertsOpen]);
+
+  const handleDeleteAlert = async (id: string | number) => {
+    setDeletingAlertId(String(id));
+    try {
+      await api.deleteAlert(id);
+      setAlerts((prev) => prev.filter((a) => String(a.id) !== String(id)));
+    } catch {
+      // Ignore
+    } finally {
+      setDeletingAlertId(null);
+    }
+  };
 
   const isStock = pathname.startsWith('/stocks/');
   const symbol = isStock ? pathname.split('/')[2]?.toUpperCase() : null;
@@ -156,15 +211,106 @@ export default function Header({ onMenuClick }: { onMenuClick?: () => void }) {
             <span>{marketStatus.label}</span>
           </div>
 
-          {/* Alerts / Bell Button */}
-          <button
-            onClick={() => router.push('/watchlist#alerts')}
-            className="p-2 text-[#687A81] hover:text-[#142B32] rounded-[8px] hover:bg-[#EEF2F2] transition-colors relative"
-            aria-label="Open alerts"
-            title="Price Alerts"
-          >
-            <Bell className="w-4 h-4" />
-          </button>
+          {/* Alerts / Bell Button & Dropdown */}
+          <div className="relative" ref={alertDropdownRef}>
+            <button
+              onClick={() => {
+                setAlertsOpen((prev) => !prev);
+                if (!alertsOpen) fetchAlerts();
+              }}
+              className={`p-2 rounded-[8px] transition-colors relative ${
+                alertsOpen ? 'bg-[#EEF2F2] text-[#142B32]' : 'text-[#687A81] hover:text-[#142B32] hover:bg-[#EEF2F2]'
+              }`}
+              aria-label="Open alerts"
+              title="Price Alerts"
+            >
+              <Bell className="w-4 h-4" />
+              {alerts.length > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#087F73]" />
+              )}
+            </button>
+
+            {/* Alerts Dropdown Popover */}
+            {alertsOpen && (
+              <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-white border border-[#E1E7E8] rounded-[14px] shadow-xl z-50 overflow-hidden animate-fade-in">
+                <div className="p-4 border-b border-[#E1E7E8] flex items-center justify-between bg-[#FAFBFA]">
+                  <div>
+                    <h3 className="text-sm font-semibold text-[#142B32]">Price Alerts</h3>
+                    <p className="text-[11px] text-[#687A81] mt-0.5">
+                      {alerts.length} {alerts.length === 1 ? 'alert' : 'alerts'} configured
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setAlertsOpen(false)}
+                    className="p-1 text-[#687A81] hover:text-[#142B32] rounded"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="max-h-80 overflow-y-auto divide-y divide-[#EDF0F0]">
+                  {alerts.length > 0 ? (
+                    alerts.map((a: any) => {
+                      const isDelivered = a.status === 'DELIVERED';
+                      const isTriggered = a.status === 'TRIGGERED';
+                      const isDeleting = deletingAlertId === String(a.id);
+
+                      return (
+                        <div key={a.id} className="p-3.5 hover:bg-[#F9FBFA] transition-colors flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <Link
+                                href={`/stocks/${a.symbol}`}
+                                onClick={() => setAlertsOpen(false)}
+                                className="font-semibold text-xs text-[#142B32] hover:text-[#087F73] transition-colors"
+                              >
+                                {a.symbol}
+                              </Link>
+                              <span
+                                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-[4px] border ${
+                                  isDelivered
+                                    ? 'bg-[#EAF2EC] text-[#087F73] border-[#D8E5DE]'
+                                    : isTriggered
+                                    ? 'bg-[#FAF3E5] text-[#8B734D] border-[#EEE2C6]'
+                                    : 'bg-[#EEF2F2] text-[#142B32] border-[#E1E7E8]'
+                                }`}
+                              >
+                                {a.status || 'SAVED'}
+                              </span>
+                            </div>
+                            <div className="text-xs text-[#142B32] font-mono mt-0.5">
+                              {a.price_target ? `Target: ₹${Number(a.price_target).toFixed(2)}` : (a.message || 'Price Alert')}
+                            </div>
+                            <div className="text-[10px] text-[#687A81] mt-0.5">
+                              {a.time || (a.created_at ? new Date(a.created_at).toLocaleString('en-IN') : 'Recently')}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAlert(a.id)}
+                            disabled={isDeleting}
+                            aria-label={`Remove alert for ${a.symbol}`}
+                            className="p-1.5 text-[#687A81] hover:text-[#BB4B48] rounded hover:bg-[#FAF3F0] transition-colors shrink-0 disabled:opacity-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-8 text-center space-y-2">
+                      <Bell className="w-6 h-6 text-[#899DA3] mx-auto opacity-50" />
+                      <p className="text-xs font-semibold text-[#142B32]">No price alerts yet</p>
+                      <p className="text-[11px] text-[#687A81] max-w-xs mx-auto">
+                        Open any company research view and set a price target to receive threshold notifications.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

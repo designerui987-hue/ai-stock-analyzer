@@ -46,7 +46,15 @@ interface PaperPosition {
 }
 
 export default function PortfolioPage() {
-  const accountId = useAuth((state) => state.user?.id);
+  const storeAccountId = useAuth((state) => state.user?.id);
+  const [user, setUser] = useState<{ id?: string; email?: string } | null>(null);
+
+  useEffect(() => {
+    const u = auth.getUser();
+    setUser(u);
+  }, []);
+
+  const accountId = storeAccountId || user?.id;
   if (!accountId) {
     return (
       <div className="p-8 text-center text-xs text-[#687A81]">
@@ -65,6 +73,7 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
   const [loading, setLoading] = useState<boolean>(true);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [holdingToRemove, setHoldingToRemove] = useState<string | null>(null);
 
   // Form State
   const [symbolInput, setSymbolInput] = useState('');
@@ -208,29 +217,60 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
     return [];
   }, [activeTab, portfolio, paperPositions]);
 
-  const { totalInvested, totalCurrentValue, totalPnl, totalPnlPct } = useMemo(() => {
+  const {
+    totalInvested,
+    totalCurrentValue,
+    totalPnl,
+    totalPnlPct,
+    pricedCount,
+    totalCount,
+    valuationMessage,
+  } = useMemo(() => {
     let invested = 0;
     let current = 0;
+    let priced = 0;
+    const total = activeHoldings.length;
+
     activeHoldings.forEach((h: any) => {
-      invested += h.invested || 0;
-      current += h.current_value || h.invested || 0;
+      invested += typeof h.invested === 'number' ? h.invested : 0;
+      if (typeof h.current_value === 'number') {
+        current += h.current_value;
+        priced++;
+      }
     });
-    const pnl = current - invested;
-    const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
+
+    const isAvailable = priced === total && total > 0;
+    const isPartial = priced > 0 && priced < total;
+    const pnl = isAvailable ? current - invested : null;
+    const pnlPct = isAvailable && invested > 0 ? (pnl! / invested) * 100 : null;
+
+    let message = isAvailable
+      ? `Based on latest quotes · ${priced} of ${total} holdings priced`
+      : isPartial
+      ? `Partial valuation · ${priced} of ${total} holdings priced`
+      : `Valuation unavailable · 0 of ${total} holdings priced.`;
+
+    if (activeTab === 'MANUAL' && portfolio?.valuation_message) {
+      message = portfolio.valuation_message;
+    }
+
     return {
       totalInvested: invested,
-      totalCurrentValue: current,
+      totalCurrentValue: isAvailable ? current : null,
       totalPnl: pnl,
       totalPnlPct: pnlPct,
+      pricedCount: priced,
+      totalCount: total,
+      valuationMessage: message,
     };
-  }, [activeHoldings]);
+  }, [activeHoldings, activeTab, portfolio]);
 
-  // Sector breakdown
+  // Sector breakdown (by current value if available, else by invested cost)
   const sectors = useMemo(() => {
     const map: Record<string, number> = {};
     activeHoldings.forEach((h: any) => {
       const sec = h.sector || 'Equities';
-      const val = h.current_value || h.invested || 0;
+      const val = typeof h.current_value === 'number' ? h.current_value : (h.invested || 0);
       map[sec] = (map[sec] || 0) + val;
     });
     return map;
@@ -478,10 +518,16 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-[#E1E7E8] border border-[#E1E7E8] rounded-[12px] overflow-hidden">
             <div className="bg-white p-6">
               <p className="text-xs text-[#687A81] mb-1">Current value</p>
-              <strong className="text-[28px] font-semibold text-[#142B32] font-mono tracking-tight block">
-                {formatINR(totalCurrentValue, 2)}
-              </strong>
-              <span className="text-[11px] text-[#687A81] mt-1 block">Based on latest quotes</span>
+              {totalCurrentValue !== null ? (
+                <strong className="text-[28px] font-semibold text-[#142B32] font-mono tracking-tight block">
+                  {formatINR(totalCurrentValue, 2)}
+                </strong>
+              ) : (
+                <strong className="text-[20px] font-semibold text-[#687A81] tracking-tight block">
+                  Valuation unavailable
+                </strong>
+              )}
+              <span className="text-[11px] text-[#687A81] mt-1 block">{valuationMessage}</span>
             </div>
 
             <div className="bg-white p-6">
@@ -494,17 +540,28 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
 
             <div className="bg-white p-6">
               <p className="text-xs text-[#687A81] mb-1">Unrealised return</p>
-              <strong
-                className={`text-[28px] font-semibold font-mono tracking-tight block ${
-                  totalPnl >= 0 ? 'text-[#087F73]' : 'text-[#BB4B48]'
-                }`}
-              >
-                {totalPnl >= 0 ? '+' : ''}
-                {formatINR(totalPnl, 2)}
-              </strong>
-              <span className="text-[11px] text-[#687A81] mt-1 block">
-                {formatPercent(totalPnlPct)} · before fees
-              </span>
+              {totalPnl !== null ? (
+                <>
+                  <strong
+                    className={`text-[28px] font-semibold font-mono tracking-tight block ${
+                      totalPnl > 0 ? 'text-[#087F73]' : totalPnl < 0 ? 'text-[#BB4B48]' : 'text-[#687A81]'
+                    }`}
+                  >
+                    {totalPnl > 0 ? '+' : ''}
+                    {formatINR(totalPnl, 2)}
+                  </strong>
+                  <span className="text-[11px] text-[#687A81] mt-1 block">
+                    {formatPercent(totalPnlPct)} · before fees
+                  </span>
+                </>
+              ) : (
+                <>
+                  <strong className="text-[20px] font-semibold text-[#687A81] tracking-tight block">
+                    Valuation unavailable
+                  </strong>
+                  <span className="text-[11px] text-[#687A81] mt-1 block">{valuationMessage}</span>
+                </>
+              )}
             </div>
           </div>
 
@@ -534,8 +591,10 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
                   </thead>
                   <tbody className="divide-y divide-[#EDF0F0]">
                     {activeHoldings.map((h: any) => {
-                      const pnl = (h.current_value || h.invested) - h.invested;
-                      const isUp = pnl >= 0;
+                      const hasQuote = typeof h.current_value === 'number';
+                      const pnl = hasQuote ? h.current_value - h.invested : null;
+                      const isUp = pnl !== null ? pnl > 0 : false;
+                      const isZero = pnl === 0;
 
                       return (
                         <tr key={h.symbol} className="hover:bg-[#F9FBFA] transition-colors">
@@ -551,27 +610,43 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
                                 </Link>
                                 <div className="text-xs text-[#687A81]">
                                   {h.qty} shares · avg. {formatINR(h.avg_price, 2)}
+                                  {typeof h.current_price === 'number' && (
+                                    <span> · last {formatINR(h.current_price, 2)}</span>
+                                  )}
                                 </div>
                               </div>
                             </div>
                           </td>
                           <td className="py-3.5 px-6 text-right font-mono">
-                            <div className="font-semibold text-[#142B32]">
-                              {formatINR(h.current_value || h.invested, 2)}
-                            </div>
-                            <div
-                              className={`text-xs ${
-                                isUp ? 'text-[#087F73]' : 'text-[#BB4B48]'
-                              }`}
-                            >
-                              {isUp ? '+' : ''}
-                              {formatINR(pnl, 2)}
-                            </div>
+                            {hasQuote ? (
+                              <>
+                                <div className="font-semibold text-[#142B32]">
+                                  {formatINR(h.current_value, 2)}
+                                </div>
+                                <div
+                                  className={`text-xs ${
+                                    isUp ? 'text-[#087F73]' : isZero ? 'text-[#687A81]' : 'text-[#BB4B48]'
+                                  }`}
+                                >
+                                  {isUp ? '+' : ''}
+                                  {formatINR(pnl!, 2)}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="font-medium text-xs text-[#687A81]">
+                                  Valuation unavailable
+                                </div>
+                                <div className="text-[11px] text-[#899DA3]">
+                                  Quote unavailable
+                                </div>
+                              </>
+                            )}
                           </td>
                           {activeTab === 'MANUAL' && (
                             <td className="py-3.5 px-6 text-right">
                               <button
-                                onClick={() => handleRemoveHolding(h.symbol)}
+                                onClick={() => setHoldingToRemove(h.symbol)}
                                 className="p-1.5 text-[#687A81] hover:text-[#BB4B48] rounded hover:bg-[#EEF2F2] transition-colors"
                                 aria-label={`Remove ${h.symbol}`}
                               >
@@ -597,7 +672,8 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
               {/* Allocation Color Bar */}
               <div className="h-3 flex rounded-[4px] overflow-hidden my-4 bg-[#EEF2F2]">
                 {Object.entries(sectors).map(([sec, val], idx) => {
-                  const pct = totalCurrentValue > 0 ? (val / totalCurrentValue) * 100 : 0;
+                  const totalVal = (typeof totalCurrentValue === 'number' && totalCurrentValue > 0) ? totalCurrentValue : (totalInvested > 0 ? totalInvested : 0);
+                  const pct = totalVal > 0 ? (val / totalVal) * 100 : 0;
                   const colors = ['#087F73', '#406282', '#987433', '#8F6A24', '#687A81'];
                   return (
                     <span
@@ -615,7 +691,8 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
               {/* Allocation List */}
               <div className="divide-y divide-[#E1E7E8] text-xs">
                 {Object.entries(sectors).map(([sec, val]) => {
-                  const pct = totalCurrentValue > 0 ? (val / totalCurrentValue) * 100 : 0;
+                  const totalVal = (typeof totalCurrentValue === 'number' && totalCurrentValue > 0) ? totalCurrentValue : (totalInvested > 0 ? totalInvested : 0);
+                  const pct = totalVal > 0 ? (val / totalVal) * 100 : 0;
                   return (
                     <div key={sec} className="py-2.5 flex items-center justify-between">
                       <span className="text-[#687A81]">{sec}</span>
@@ -636,6 +713,38 @@ function AccountPortfolio({ accountId, storageKey }: { accountId: string; storag
             </aside>
           </div>
         </>
+      )}
+
+      {/* ── Remove Holding Confirmation Modal ────────────────────────────── */}
+      {holdingToRemove && (
+        <div className="fixed inset-0 bg-[#0c232c]/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-[14px] max-w-xs w-full p-5 shadow-2xl border border-[#E1E7E8] space-y-3">
+            <h3 className="text-sm font-semibold text-[#142B32]">Remove Holding</h3>
+            <p className="text-xs text-[#687A81]">
+              Are you sure you want to remove <strong className="text-[#142B32]">{holdingToRemove}</strong> from your portfolio?
+            </p>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setHoldingToRemove(null)}
+                className="flex-1 py-1.5 border border-[#CCD7D9] text-[#142B32] text-xs font-semibold rounded-[6px] hover:bg-[#EEF2F2]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const sym = holdingToRemove;
+                  setHoldingToRemove(null);
+                  handleRemoveHolding(sym);
+                }}
+                className="flex-1 py-1.5 bg-[#BB4B48] text-white text-xs font-semibold rounded-[6px] hover:bg-[#a63f3d]"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

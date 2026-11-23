@@ -1,18 +1,27 @@
 """Smart alerts API endpoints."""
 
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel, Field
+from datetime import datetime, timezone
 from db.session import get_db
-from db.models import Alert, User
+from db.models import Alert, User, AlertType
 from auth.security import get_current_user
-from models.analysis import AlertType, AlertPriority
+from models.analysis import AlertPriority
 from data.demo_stocks import NIFTY50_STOCKS
 from ai_models.prediction_engine import prediction_engine
 from config import settings
 
 router = APIRouter()
+
+
+class CreatePriceAlertRequest(BaseModel):
+    symbol: str
+    price_target: float = Field(gt=0)
+    alert_type: str = "price_target"
+    direction: Optional[str] = "above"
 
 
 def generate_demo_alerts():
@@ -86,35 +95,122 @@ async def get_alerts(
     user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all active alerts for the user."""
-    # Get alerts from database
+    """Get all alerts for the verified user with lifecycle state (SAVED / TRIGGERED / DELIVERED)."""
     db_alerts = db.query(Alert).filter(
-        Alert.user_id == int(user_id),
-        Alert.is_active == True
-    ).all()
+        Alert.user_id == int(user_id)
+    ).order_by(Alert.created_at.desc()).all()
 
     if not db_alerts:
         if settings.demo_mode:
             return generate_demo_alerts()
         return []
 
-    # Convert database alerts to API format
     alerts = []
     for alert in db_alerts:
         stock = NIFTY50_STOCKS.get(alert.symbol, {})
+        # Distinguish saved vs triggered vs delivered lifecycle state
+        if alert.triggered_at is not None:
+            lifecycle_status = "DELIVERED"
+        elif alert.is_triggered:
+            lifecycle_status = "TRIGGERED"
+        else:
+            lifecycle_status = "SAVED"
+
         alerts.append({
             "id": str(alert.id),
             "type": alert.alert_type.value,
             "priority": "high" if alert.alert_type in [AlertType.BUY_SIGNAL, AlertType.SELL_SIGNAL] else "medium",
             "symbol": alert.symbol,
+            "name": stock.get("name", alert.symbol),
+            "price_target": alert.price_target,
+            "status": lifecycle_status,
             "title": f"Alert for {stock.get('name', alert.symbol)}",
-            "message": f"Alert triggered for {alert.symbol}",
-            "time": "Recently",
+            "message": f"Target: ₹{alert.price_target:.2f}" if alert.price_target else f"Signal alert for {alert.symbol}",
+            "time": alert.created_at.strftime("%d %b, %H:%M") if alert.created_at else "Recently",
+            "created_at": alert.created_at.isoformat() if alert.created_at else None,
+            "triggered_at": alert.triggered_at.isoformat() if alert.triggered_at else None,
             "read": not alert.is_active,
             "is_active": alert.is_active,
+            "is_triggered": alert.is_triggered,
         })
 
     return alerts
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+async def create_alert(
+    request: CreatePriceAlertRequest,
+    user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a persistent price alert bound to the authenticated user."""
+    clean_sym = request.symbol.strip().upper()
+    if not clean_sym:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Symbol cannot be empty."
+        )
+    if request.price_target <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Price target must be greater than zero."
+        )
+
+    if request.direction == "below" or request.alert_type == "price_below":
+        at = AlertType.PRICE_BELOW
+    elif request.alert_type == "buy_signal":
+        at = AlertType.BUY_SIGNAL
+    elif request.alert_type == "sell_signal":
+        at = AlertType.SELL_SIGNAL
+    else:
+        at = AlertType.PRICE_ABOVE
+
+    alert = Alert(
+        user_id=int(user_id),
+        symbol=clean_sym,
+        alert_type=at,
+        price_target=round(float(request.price_target), 2),
+        is_active=True,
+        is_triggered=False,
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+
+    stock = NIFTY50_STOCKS.get(clean_sym, {})
+    return {
+        "id": str(alert.id),
+        "symbol": alert.symbol,
+        "name": stock.get("name", alert.symbol),
+        "alert_type": alert.alert_type.value,
+        "price_target": alert.price_target,
+        "status": "SAVED",
+        "is_active": alert.is_active,
+        "is_triggered": alert.is_triggered,
+        "created_at": alert.created_at.isoformat() if alert.created_at else None,
+    }
+
+
+@router.delete("/{alert_id}")
+async def delete_alert(
+    alert_id: int,
+    user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an alert with strict account ownership isolation."""
+    alert = db.query(Alert).filter(
+        Alert.id == alert_id,
+        Alert.user_id == int(user_id)
+    ).first()
+    if not alert:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Alert not found or access denied."
+        )
+
+    db.delete(alert)
+    db.commit()
+    return {"success": True, "id": str(alert_id)}
 
 
 @router.get("/unread-count")

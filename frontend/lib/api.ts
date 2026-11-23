@@ -360,6 +360,15 @@ export const api = {
   getAlerts: () => fetchAPI('/api/alerts/'),
   getUnreadCount: () => fetchAPI('/api/alerts/unread-count'),
   getInsights: () => fetchAPI('/api/alerts/insights'),
+  createAlert: (symbol: string, priceTarget: number, alertType: string = 'price_target', direction: string = 'above') =>
+    fetchAPI('/api/alerts/', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, price_target: priceTarget, alert_type: alertType, direction }),
+    }),
+  deleteAlert: (alertId: string | number) =>
+    fetchAPI(`/api/alerts/${alertId}`, {
+      method: 'DELETE',
+    }),
 
   // Watchlist (Persisted per-user in PostgreSQL)
   getWatchlist: () => fetchAPI('/api/watchlist'),
